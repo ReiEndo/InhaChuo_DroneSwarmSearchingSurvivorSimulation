@@ -1,0 +1,55 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Native dev build",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "ENABLE_TESTING": "OFF",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "tests",
+      "displayName": "Native test build",
+      "inherits": "dev",
+      "cacheVariables": {
+        "ENABLE_TESTING": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Native release build",
+      "inherits": "dev",
+      "cacheVariables": {
+        "ENABLE_TESTING": "OFF",
+        "ENABLE_INSTALL": "ON",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "tests",
+      "configurePreset": "tests"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests",
+      "configurePreset": "tests",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

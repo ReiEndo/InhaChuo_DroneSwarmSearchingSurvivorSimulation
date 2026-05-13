@@ -105,3 +105,11 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Environment
+.DS_Store
+.direnv
+.envrc
+
+# C/C++ editor indexes
+Native/drone-navigation-native/.cache/

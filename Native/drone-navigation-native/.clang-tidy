@@ -1,0 +1,11 @@
+Checks: >
+  clang-analyzer-*,
+  bugprone-*,
+  performance-*,
+  portability-*,
+  -portability-avoid-pragma-once,
+  -bugprone-easily-swappable-parameters,
+  -performance-enum-size
+WarningsAsErrors: ''
+HeaderFilterRegex: '.*Native/drone-navigation-native/src/.*'
+FormatStyle: file
