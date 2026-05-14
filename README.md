@@ -22,6 +22,8 @@ Native shortcuts:
 dn-config        # configure native build, tests off
 dn-config-tests  # configure native build, tests on + compile_commands.json
 dn-build         # build native library/tests
+dn-stage        # copy built native plugin into Assets/Plugins/<target>/
+dn-unity-plugin  # build native library/tests, then stage the Unity plugin
 dn-test          # run native tests
 dn-format        # format C++ sources with clang-format
 dn-lint          # lint C++ sources with clang-tidy
@@ -33,6 +35,14 @@ Recommended first run:
 ```bash
 dn-check
 ```
+
+To make the built native library available to Unity:
+
+```bash
+dn-unity-plugin
+```
+
+This creates Unity plugin folders for all supported desktop targets and copies any libraries produced by the native build:
 
 ### Editor setup
 
