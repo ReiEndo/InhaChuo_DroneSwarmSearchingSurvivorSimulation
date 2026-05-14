@@ -42,7 +42,7 @@ To make the built native library available to Unity:
 dn-unity-plugin
 ```
 
-This creates Unity plugin folders for all supported desktop targets and copies any libraries produced by the native build:
+This creates Unity plugin folders for all supported desktop targets and copies any libraries produced by the native build.
 
 ### Editor setup
 
