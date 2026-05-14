@@ -169,5 +169,6 @@ Assets/TutorialInfo/Icons/URP.png -filter -diff -merge -text -lfs
 # Spine export file for Unity
 *.skel.bytes            lfs
 
-# Exceptions for .asset files such as lightning pre-baking
-LightingData.asset     binary
+# Exceptions for binary .asset files such as lighting pre-baking and terrain data
+LightingData.asset            binary
+**/*[Tt]errain*.asset         lfs -unity-yaml -linguist-language
