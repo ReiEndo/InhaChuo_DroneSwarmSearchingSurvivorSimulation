@@ -135,6 +135,8 @@ Packages/packages-lock.json linguist-generated
 *.tiff                  lfs
 *.webp                  lfs
 
+Assets/TutorialInfo/Icons/URP.png -filter -diff -merge -text -lfs
+
 # Compressed Archive
 *.7z                    lfs
 *.bz2                   lfs
