@@ -57,6 +57,77 @@
           '';
         };
 
+        dn-stage = pkgs.writeShellApplication {
+          name = "dn-stage";
+          runtimeInputs = with pkgs; [ coreutils ];
+          text = ''
+            build_dir="Native/drone-navigation-native/build/src"
+            staged=0
+
+            mkdir -p \
+              Assets/Plugins/macOS \
+              Assets/Plugins/Linux \
+              Assets/Plugins/Windows \
+              Assets/Plugins/WebGL
+
+            if [ -f "$build_dir/libdrone_algo.dylib" ]; then
+              cp "$build_dir/libdrone_algo.dylib" Assets/Plugins/macOS/libdrone_algo.dylib
+              echo "Staged Assets/Plugins/macOS/libdrone_algo.dylib"
+              staged=1
+            fi
+
+            if [ -f "$build_dir/libdrone_algo.so" ]; then
+              cp "$build_dir/libdrone_algo.so" Assets/Plugins/Linux/libdrone_algo.so
+              echo "Staged Assets/Plugins/Linux/libdrone_algo.so"
+              staged=1
+            fi
+
+            if [ -f "$build_dir/drone_algo.dll" ]; then
+              cp "$build_dir/drone_algo.dll" Assets/Plugins/Windows/drone_algo.dll
+              echo "Staged Assets/Plugins/Windows/drone_algo.dll"
+              staged=1
+            elif [ -f "$build_dir/libdrone_algo.dll" ]; then
+              cp "$build_dir/libdrone_algo.dll" Assets/Plugins/Windows/drone_algo.dll
+              echo "Staged Assets/Plugins/Windows/drone_algo.dll"
+              staged=1
+            fi
+
+            for web_artifact in \
+              "$build_dir/libdrone_algo.a" \
+              "$build_dir/drone_algo.a" \
+              "$build_dir/libdrone_algo.bc" \
+              "$build_dir/drone_algo.bc" \
+              "$build_dir/libdrone_algo.wasm" \
+              "$build_dir/drone_algo.wasm" \
+              "$build_dir/libdrone_algo.js" \
+              "$build_dir/drone_algo.js"
+            do
+              if [ -f "$web_artifact" ]; then
+                cp "$web_artifact" "Assets/Plugins/WebGL/$(basename "$web_artifact")"
+                echo "Staged Assets/Plugins/WebGL/$(basename "$web_artifact")"
+                staged=1
+              fi
+            done
+
+            if [ "$staged" -eq 0 ]; then
+              echo "No native library was found in $build_dir. Run dn-build first." >&2
+              exit 1
+            fi
+          '';
+        };
+
+        dn-unity-plugin = pkgs.writeShellApplication {
+          name = "dn-unity-plugin";
+          runtimeInputs = [
+            dn-build
+            dn-stage
+          ];
+          text = ''
+            dn-build
+            dn-stage
+          '';
+        };
+
         dn-format = pkgs.writeShellApplication {
           name = "dn-format";
           runtimeInputs = with pkgs; [
@@ -102,6 +173,7 @@
           text = ''
             dn-config-tests
             dn-build
+            dn-stage
             dn-test
             dn-lint
           '';
@@ -140,6 +212,8 @@
             dn-config-tests
             dn-build
             dn-test
+            dn-stage
+            dn-unity-plugin
             dn-format
             dn-lint
             dn-check
