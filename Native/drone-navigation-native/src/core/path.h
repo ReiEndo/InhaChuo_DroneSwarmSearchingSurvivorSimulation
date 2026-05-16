@@ -35,6 +35,7 @@ enum class CellState : std::int32_t {
 struct CellStateUpdate {
   Vec3i position;
   CellState state;
+  std::int64_t observed_at = 0;
 };
 
 struct PathRequest {

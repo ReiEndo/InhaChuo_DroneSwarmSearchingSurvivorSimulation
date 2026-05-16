@@ -3,11 +3,14 @@ target_sources(drone_algo
     PUBLIC
     $<INSTALL_INTERFACE:include/src/core/path.h>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/core/path.h>
+    $<INSTALL_INTERFACE:include/src/core/local_map.h>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/core/local_map.h>
     $<INSTALL_INTERFACE:include/src/algorithms/astar/planner.h>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/astar/planner.h>
     $<INSTALL_INTERFACE:include/src/algorithms/frontier/frontier.h>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/frontier/frontier.h>
     PRIVATE
+    core/local_map.cc
     core/path.cc
     algorithms/astar/planner.cc
     algorithms/frontier/frontier.cc)
@@ -25,5 +28,9 @@ if(ENABLE_TESTING)
     MAKE_CC_TEST(
         NAME frontier_test
         SRCS tests/frontier_test.cc
+        DEPS drone_algo)
+    MAKE_CC_TEST(
+        NAME local_map_test
+        SRCS tests/local_map_test.cc
         DEPS drone_algo)
 endif()
