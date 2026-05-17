@@ -11,11 +11,15 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     [SerializeField] private DroneNative.PlannerType plannerType = DroneNative.PlannerType.AStar;
     [SerializeField] private int maxPathLength = 512;
     [SerializeField] private float replanIntervalSeconds = 0.5f;
+    [SerializeField] private float goalCommitmentSeconds = 2f;
+    [SerializeField] private float goalSwitchImprovementRatio = 0.6f;
+    [SerializeField] private float recentGoalPenaltySeconds = 8f;
+    [SerializeField] private float recentGoalPenaltyDistance = 16f;
 
     [Header("Movement")]
     [SerializeField] private bool followPath = true;
     [SerializeField] private float moveSpeed = 3f;
-    [SerializeField] private float arriveDistance = 0.05f;
+    [SerializeField] private float arriveDistance = 0.2f;
 
     private static readonly DroneNative.DroneVec3i[] NeighborOffsets =
     {
@@ -37,12 +41,36 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private int pathIndex;
     private float nextReplanAt;
     private bool replanRequested = true;
+    private bool immediateReplanRequested;
     private DroneNative.DroneVec3i currentGoal;
+    private float currentGoalChosenAt;
+    private float currentGoalDistanceSquared;
     private bool hasGoal;
     private readonly List<FrontierCandidate> frontierCandidates = new();
+    private readonly Dictionary<int, float> recentGoalTimes = new();
+    private readonly List<int> expiredRecentGoalKeys = new();
 
     public bool HasGoal => hasGoal;
     public DroneNative.DroneVec3i CurrentGoal => currentGoal;
+    public DroneNative.DroneVec3i[] Path => path;
+    public int UsablePathCount => usablePathCount;
+    public int PathIndex => pathIndex;
+
+    public DroneNative.PlannerType PlannerType
+    {
+        get => plannerType;
+        set
+        {
+            plannerType = value;
+            RequestReplan();
+        }
+    }
+
+    public float MoveSpeed
+    {
+        get => moveSpeed;
+        set => moveSpeed = Mathf.Max(0f, value);
+    }
 
     private void Awake()
     {
@@ -88,6 +116,10 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     {
         maxPathLength = Mathf.Max(2, maxPathLength);
         replanIntervalSeconds = Mathf.Max(0.05f, replanIntervalSeconds);
+        goalCommitmentSeconds = Mathf.Max(0f, goalCommitmentSeconds);
+        goalSwitchImprovementRatio = Mathf.Clamp01(goalSwitchImprovementRatio);
+        recentGoalPenaltySeconds = Mathf.Max(0f, recentGoalPenaltySeconds);
+        recentGoalPenaltyDistance = Mathf.Max(0f, recentGoalPenaltyDistance);
         moveSpeed = Mathf.Max(0f, moveSpeed);
         arriveDistance = Mathf.Max(0.001f, arriveDistance);
     }
@@ -103,7 +135,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             }
         }
 
-        if (replanRequested && Time.time >= nextReplanAt)
+        if (replanRequested && (immediateReplanRequested || Time.time >= nextReplanAt))
         {
             PlanNextRoute();
         }
@@ -114,6 +146,12 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     public void RequestReplan()
     {
         replanRequested = true;
+    }
+
+    private void RequestImmediateReplan()
+    {
+        replanRequested = true;
+        immediateReplanRequested = true;
     }
 
     private void HandleObservationsChanged(DroneGridSensor changedSensor)
@@ -133,13 +171,16 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             return;
         }
 
+        AdvanceReachedWaypoints();
+        if (pathIndex >= usablePathCount && !TryContinueWithImmediateReplan())
+        {
+            return;
+        }
+
         Vector3 destination = world.GridToWorld(path[pathIndex], transform.position.y);
         Vector3 toDestination = destination - transform.position;
-        float desiredSpeed = Time.deltaTime > Mathf.Epsilon
-            ? Mathf.Min(moveSpeed, toDestination.magnitude / Time.deltaTime)
-            : moveSpeed;
         Vector3 preferredVelocity = toDestination.sqrMagnitude > Mathf.Epsilon
-            ? toDestination.normalized * desiredSpeed
+            ? toDestination.normalized * moveSpeed
             : Vector3.zero;
 
         if (avoidanceMotor != null)
@@ -155,22 +196,55 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             );
         }
 
-        if (Vector3.Distance(transform.position, destination) > arriveDistance)
+        AdvanceReachedOrPassedWaypoints(destination, toDestination);
+        if (pathIndex >= usablePathCount)
+        {
+            TryContinueWithImmediateReplan();
+        }
+    }
+
+    private bool TryContinueWithImmediateReplan()
+    {
+        PlanNextRoute();
+        return followPath && usablePathCount > 0 && pathIndex < usablePathCount;
+    }
+
+    private void AdvanceReachedWaypoints()
+    {
+        while (pathIndex < usablePathCount)
+        {
+            Vector3 destination = world.GridToWorld(path[pathIndex], transform.position.y);
+            if (Vector3.Distance(transform.position, destination) > arriveDistance)
+            {
+                return;
+            }
+
+            pathIndex++;
+        }
+    }
+
+    private void AdvanceReachedOrPassedWaypoints(Vector3 previousDestination, Vector3 previousOffset)
+    {
+        if (pathIndex >= usablePathCount)
         {
             return;
         }
 
-        pathIndex++;
-
-        if (pathIndex >= usablePathCount)
+        Vector3 currentDestination = world.GridToWorld(path[pathIndex], transform.position.y);
+        Vector3 currentOffset = currentDestination - transform.position;
+        if (Vector3.Distance(transform.position, currentDestination) <= arriveDistance
+            || (currentDestination == previousDestination
+                && Vector3.Dot(previousOffset, currentOffset) <= 0f))
         {
-            RequestReplan();
+            pathIndex++;
+            AdvanceReachedWaypoints();
         }
     }
 
     private void PlanNextRoute()
     {
         replanRequested = false;
+        immediateReplanRequested = false;
         nextReplanAt = Time.time + replanIntervalSeconds;
 
         if (agentState.LocalMap == null)
@@ -195,6 +269,8 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         }
 
         currentGoal = goalCell;
+        currentGoalChosenAt = Time.time;
+        currentGoalDistanceSquared = SquaredDistance(startCell, goalCell);
         hasGoal = true;
         usablePathCount = Mathf.Min(pathCount, path.Length);
         pathIndex = usablePathCount > 1 ? 1 : 0;
@@ -212,12 +288,32 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             return TryPlanPath(startCell, goalCell, snapshot);
         }
 
+        if (ShouldKeepCurrentGoal(startCell, snapshot))
+        {
+            goalCell = currentGoal;
+            return true;
+        }
+
         CollectFrontierCandidates(startCell);
 
-        foreach (var candidate in frontierCandidates)
+        int candidateCount = frontierCandidates.Count;
+        int startIndex = candidateCount > 0
+            ? Mathf.Abs(agentState.DroneId) % Mathf.Min(candidateCount, 8)
+            : 0;
+
+        for (int offset = 0; offset < candidateCount; offset++)
         {
+            var candidate = frontierCandidates[(startIndex + offset) % candidateCount];
+            if (hasGoal
+                && IsCommittedToCurrentGoal()
+                && candidate.DistanceSquared >= currentGoalDistanceSquared * goalSwitchImprovementRatio)
+            {
+                continue;
+            }
+
             if (TryPlanPath(startCell, candidate.Cell, snapshot))
             {
+                currentGoalDistanceSquared = candidate.RawDistanceSquared;
                 goalCell = candidate.Cell;
                 return true;
             }
@@ -233,14 +329,16 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
 
         foreach (var observation in agentState.LocalMap.KnownObservations)
         {
-            if (!IsTraversable(observation.State)
+            if (CellsEqual(observation.Cell, startCell)
+                || !IsTraversable(observation.State)
                 || !HasUnknownNeighbor(observation.Cell))
             {
                 continue;
             }
 
-            float distance = SquaredDistance(startCell, observation.Cell);
-            frontierCandidates.Add(new FrontierCandidate(observation.Cell, distance));
+            float rawDistance = SquaredDistance(startCell, observation.Cell);
+            float rankedDistance = rawDistance + GetRecentGoalPenalty(observation.Cell);
+            frontierCandidates.Add(new FrontierCandidate(observation.Cell, rankedDistance, rawDistance));
         }
 
         frontierCandidates.Sort(static (left, right) =>
@@ -293,10 +391,88 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
 
     private void ClearPath()
     {
+        if (hasGoal)
+        {
+            recentGoalTimes[agentState.LocalMap.GridIndex(currentGoal)] = Time.time;
+        }
+
         pathCount = 0;
         usablePathCount = 0;
         pathIndex = 0;
         hasGoal = false;
+    }
+
+    private bool ShouldKeepCurrentGoal(
+        DroneNative.DroneVec3i startCell,
+        DronePlannerInputSnapshot snapshot
+    )
+    {
+        if (!hasGoal || CellsEqual(startCell, currentGoal))
+        {
+            return false;
+        }
+
+        DroneCellState goalState = agentState.LocalMap.GetState(currentGoal);
+        if (!IsTraversable(goalState) || !HasUnknownNeighbor(currentGoal))
+        {
+            return false;
+        }
+
+        if (!IsCommittedToCurrentGoal())
+        {
+            return false;
+        }
+
+        bool planned = TryPlanPath(startCell, currentGoal, snapshot);
+        if (planned)
+        {
+            currentGoalDistanceSquared = SquaredDistance(startCell, currentGoal);
+        }
+
+        return planned;
+    }
+
+    private bool IsCommittedToCurrentGoal()
+    {
+        return Time.time - currentGoalChosenAt < goalCommitmentSeconds;
+    }
+
+    private float GetRecentGoalPenalty(DroneNative.DroneVec3i cell)
+    {
+        if (recentGoalPenaltySeconds <= 0f
+            || recentGoalPenaltyDistance <= 0f
+            || agentState.LocalMap == null)
+        {
+            return 0f;
+        }
+
+        PruneRecentGoals();
+
+        int index = agentState.LocalMap.GridIndex(cell);
+        return recentGoalTimes.ContainsKey(index) ? recentGoalPenaltyDistance : 0f;
+    }
+
+    private void PruneRecentGoals()
+    {
+        if (recentGoalTimes.Count == 0)
+        {
+            return;
+        }
+
+        float expiryTime = Time.time - recentGoalPenaltySeconds;
+        expiredRecentGoalKeys.Clear();
+        foreach (var pair in recentGoalTimes)
+        {
+            if (pair.Value <= expiryTime)
+            {
+                expiredRecentGoalKeys.Add(pair.Key);
+            }
+        }
+
+        foreach (int key in expiredRecentGoalKeys)
+        {
+            recentGoalTimes.Remove(key);
+        }
     }
 
     private static bool IsTraversable(DroneCellState state)
@@ -315,15 +491,29 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         return dx * dx + dy * dy + dz * dz;
     }
 
+    private static bool CellsEqual(
+        DroneNative.DroneVec3i a,
+        DroneNative.DroneVec3i b
+    )
+    {
+        return a.x == b.x && a.y == b.y && a.z == b.z;
+    }
+
     private readonly struct FrontierCandidate
     {
         public readonly DroneNative.DroneVec3i Cell;
         public readonly float DistanceSquared;
+        public readonly float RawDistanceSquared;
 
-        public FrontierCandidate(DroneNative.DroneVec3i cell, float distanceSquared)
+        public FrontierCandidate(
+            DroneNative.DroneVec3i cell,
+            float distanceSquared,
+            float rawDistanceSquared
+        )
         {
             Cell = cell;
             DistanceSquared = distanceSquared;
+            RawDistanceSquared = rawDistanceSquared;
         }
     }
 
