@@ -20,6 +20,7 @@ public sealed class DroneSwarmAgentState : MonoBehaviour
     public DroneLocalMap LocalMap { get; private set; }
 
     public event Action<DroneSwarmAgentState> LocalMapReset;
+    public event Action<DroneSwarmAgentState> LocalMapChanged;
 
     private void Awake()
     {
@@ -54,14 +55,26 @@ public sealed class DroneSwarmAgentState : MonoBehaviour
     public bool ObserveCell(DroneNative.DroneVec3i cell, DroneCellState state, float timestamp)
     {
         EnsureLocalMap();
-        return LocalMap.TrySetCell(cell, state, timestamp);
+        bool changed = LocalMap.TrySetCell(cell, state, timestamp);
+        if (changed)
+        {
+            LocalMapChanged?.Invoke(this);
+        }
+
+        return changed;
     }
 
     public bool ObserveTarget(DroneNative.DroneVec3i cell, float timestamp, int reporterId = -1)
     {
         EnsureLocalMap();
         int effectiveReporterId = reporterId >= 0 ? reporterId : droneId;
-        return LocalMap.TryRecordTargetReport(cell, timestamp, effectiveReporterId);
+        bool changed = LocalMap.TryRecordTargetReport(cell, timestamp, effectiveReporterId);
+        if (changed)
+        {
+            LocalMapChanged?.Invoke(this);
+        }
+
+        return changed;
     }
 
     public int BuildPlannerInputs(

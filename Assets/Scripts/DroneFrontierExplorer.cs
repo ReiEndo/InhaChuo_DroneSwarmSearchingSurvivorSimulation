@@ -55,6 +55,11 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         {
             sensor.ObservationsChanged += HandleObservationsChanged;
         }
+
+        if (agentState != null)
+        {
+            agentState.LocalMapChanged += HandleLocalMapChanged;
+        }
     }
 
     private void OnDisable()
@@ -62,6 +67,11 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         if (sensor != null)
         {
             sensor.ObservationsChanged -= HandleObservationsChanged;
+        }
+
+        if (agentState != null)
+        {
+            agentState.LocalMapChanged -= HandleLocalMapChanged;
         }
     }
 
@@ -104,6 +114,11 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     }
 
     private void HandleObservationsChanged(DroneGridSensor changedSensor)
+    {
+        RequestReplan();
+    }
+
+    private void HandleLocalMapChanged(DroneSwarmAgentState changedAgent)
     {
         RequestReplan();
     }
