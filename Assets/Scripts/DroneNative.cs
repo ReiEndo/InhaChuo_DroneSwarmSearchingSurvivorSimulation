@@ -24,9 +24,40 @@ public static class DroneNative
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DroneVec3f
+    {
+        public float x;
+        public float y;
+        public float z;
+
+        public DroneVec3f(float x, float y, float z)
+        {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DroneNeighborState
+    {
+        public DroneVec3f position;
+        public DroneVec3f velocity;
+        public float radius;
+
+        public DroneNeighborState(DroneVec3f position, DroneVec3f velocity, float radius)
+        {
+            this.position = position;
+            this.velocity = velocity;
+            this.radius = radius;
+        }
+    }
+
     public enum PlannerType : int
     {
-        AStar = 0
+        AStar = 0,
+        ThetaStar = 1
     }
 
     public enum CellState : int
@@ -50,5 +81,17 @@ public static class DroneNative
         int knownCount,
         [Out] DroneVec3i[] outPath,
         int outCapacity
+    );
+
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int DroneComputeLocalAvoidanceVelocity(
+        DroneVec3f selfPosition,
+        DroneVec3f preferredVelocity,
+        float selfRadius,
+        float maxSpeed,
+        float timeHorizonSeconds,
+        [In] DroneNeighborState[] neighbors,
+        int neighborCount,
+        out DroneVec3f outVelocity
     );
 }
