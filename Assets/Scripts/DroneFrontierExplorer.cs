@@ -4,6 +4,7 @@ using UnityEngine;
 
 [RequireComponent(typeof(DroneSwarmAgentState))]
 [RequireComponent(typeof(DroneGridSensor))]
+[RequireComponent(typeof(DroneLocalAvoidanceMotor))]
 public sealed class DroneFrontierExplorer : MonoBehaviour
 {
     [Header("Planning")]
@@ -28,6 +29,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
 
     private DroneSwarmAgentState agentState;
     private DroneGridSensor sensor;
+    private DroneLocalAvoidanceMotor avoidanceMotor;
     private DroneDemoGridWorld world;
     private DroneNative.DroneVec3i[] path = Array.Empty<DroneNative.DroneVec3i>();
     private int pathCount;
@@ -46,6 +48,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     {
         agentState = GetComponent<DroneSwarmAgentState>();
         sensor = GetComponent<DroneGridSensor>();
+        avoidanceMotor = GetComponent<DroneLocalAvoidanceMotor>();
         world = sensor.World;
     }
 
@@ -131,11 +134,26 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         }
 
         Vector3 destination = world.GridToWorld(path[pathIndex], transform.position.y);
-        transform.position = Vector3.MoveTowards(
-            transform.position,
-            destination,
-            moveSpeed * Time.deltaTime
-        );
+        Vector3 toDestination = destination - transform.position;
+        float desiredSpeed = Time.deltaTime > Mathf.Epsilon
+            ? Mathf.Min(moveSpeed, toDestination.magnitude / Time.deltaTime)
+            : moveSpeed;
+        Vector3 preferredVelocity = toDestination.sqrMagnitude > Mathf.Epsilon
+            ? toDestination.normalized * desiredSpeed
+            : Vector3.zero;
+
+        if (avoidanceMotor != null)
+        {
+            avoidanceMotor.Move(preferredVelocity, moveSpeed);
+        }
+        else
+        {
+            transform.position = Vector3.MoveTowards(
+                transform.position,
+                destination,
+                moveSpeed * Time.deltaTime
+            );
+        }
 
         if (Vector3.Distance(transform.position, destination) > arriveDistance)
         {
