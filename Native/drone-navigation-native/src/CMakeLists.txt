@@ -9,6 +9,8 @@ target_sources(drone_algo
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/core/target_report.h>
     $<INSTALL_INTERFACE:include/src/algorithms/astar/planner.h>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/astar/planner.h>
+    $<INSTALL_INTERFACE:include/src/algorithms/theta_star/planner.h>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/theta_star/planner.h>
     $<INSTALL_INTERFACE:include/src/algorithms/frontier/frontier.h>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/frontier/frontier.h>
     $<INSTALL_INTERFACE:include/src/algorithms/avoidance/local_avoidance.h>
@@ -18,6 +20,7 @@ target_sources(drone_algo
     core/path.cc
     core/target_report.cc
     algorithms/astar/planner.cc
+    algorithms/theta_star/planner.cc
     algorithms/frontier/frontier.cc
     algorithms/avoidance/local_avoidance.cc)
 set_target_properties(drone_algo PROPERTIES OUTPUT_NAME drone_algo)
@@ -30,6 +33,10 @@ if(ENABLE_TESTING)
     MAKE_CC_TEST(
         NAME astar_planner_test
         SRCS tests/astar_planner_test.cc
+        DEPS drone_algo)
+    MAKE_CC_TEST(
+        NAME theta_star_planner_test
+        SRCS tests/theta_star_planner_test.cc
         DEPS drone_algo)
     MAKE_CC_TEST(
         NAME frontier_test
