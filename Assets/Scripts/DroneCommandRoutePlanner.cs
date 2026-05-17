@@ -31,6 +31,26 @@ public sealed class DroneCommandRoutePlanner : MonoBehaviour
     public DroneTargetReport LatestTargetReport => latestTargetReport;
     public DroneNative.DroneVec3i[] Route => route;
 
+    public DroneNative.PlannerType PlannerType
+    {
+        get => plannerType;
+        set
+        {
+            plannerType = value;
+            RequestReplan();
+        }
+    }
+
+    public DroneDemoGridWorld World
+    {
+        get => world;
+        set
+        {
+            world = value;
+            RequestReplan();
+        }
+    }
+
     private void Awake()
     {
         agentState = GetComponent<DroneSwarmAgentState>();

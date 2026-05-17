@@ -20,6 +20,25 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
     public int Height => height;
     public int Depth => depth;
 
+    public void Configure(
+        Vector3 newGridOrigin,
+        float newCellSize,
+        int newWidth,
+        int newHeight,
+        int newDepth,
+        LayerMask newBlockedLayers,
+        LayerMask newTargetLayers
+    )
+    {
+        gridOrigin = newGridOrigin;
+        cellSize = Mathf.Max(0.01f, newCellSize);
+        width = Mathf.Max(1, newWidth);
+        height = Mathf.Max(1, newHeight);
+        depth = Mathf.Max(1, newDepth);
+        blockedLayers = newBlockedLayers;
+        targetLayers = newTargetLayers;
+    }
+
     private void OnValidate()
     {
         cellSize = Mathf.Max(0.01f, cellSize);

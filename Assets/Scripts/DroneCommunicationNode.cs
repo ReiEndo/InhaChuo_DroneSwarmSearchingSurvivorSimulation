@@ -11,6 +11,17 @@ public sealed class DroneCommunicationNode : MonoBehaviour
     public float CommunicationRadius => communicationRadius;
     public bool IsCommandNode => commandNode;
 
+    public void Configure(float newCommunicationRadius, bool isCommandNode)
+    {
+        communicationRadius = Mathf.Max(0f, newCommunicationRadius);
+        commandNode = isCommandNode;
+    }
+
+    public void SetCommunicationRadius(float newCommunicationRadius)
+    {
+        communicationRadius = Mathf.Max(0f, newCommunicationRadius);
+    }
+
     private void Awake()
     {
         AgentState = GetComponent<DroneSwarmAgentState>();

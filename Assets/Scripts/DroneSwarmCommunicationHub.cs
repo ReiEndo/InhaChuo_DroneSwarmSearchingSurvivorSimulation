@@ -23,6 +23,13 @@ public sealed class DroneSwarmCommunicationHub : MonoBehaviour
 
     public IReadOnlyList<NodePairKey> ActiveLinks => activeLinks;
 
+    public void ResetCommunicationMemory()
+    {
+        sentObservationTimes.Clear();
+        sentReportTimes.Clear();
+        activeLinks.Clear();
+    }
+
     private void Awake()
     {
         RefreshNodes();

@@ -13,12 +13,20 @@ public sealed class DroneGridSensor : MonoBehaviour
     private float nextSenseAt;
 
     public event Action<DroneGridSensor> ObservationsChanged;
+    public event Action<DroneGridSensor, DroneNative.DroneVec3i> TargetSensed;
 
     public DroneDemoGridWorld World => world;
     public int SensorRadius
     {
         get => sensorRadius;
         set => sensorRadius = Mathf.Max(0, value);
+    }
+
+    public void Configure(DroneDemoGridWorld newWorld, int newSensorRadius)
+    {
+        world = newWorld;
+        SensorRadius = newSensorRadius;
+        ConfigureAgentMap();
     }
 
     private void Awake()
@@ -95,6 +103,7 @@ public sealed class DroneGridSensor : MonoBehaviour
                     if (state == DroneCellState.Target)
                     {
                         changed |= agentState.ObserveTarget(cell, timestamp);
+                        TargetSensed?.Invoke(this, cell);
                     }
                     else
                     {
