@@ -11,12 +11,15 @@ target_sources(drone_algo
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/astar/planner.h>
     $<INSTALL_INTERFACE:include/src/algorithms/frontier/frontier.h>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/frontier/frontier.h>
+    $<INSTALL_INTERFACE:include/src/algorithms/avoidance/local_avoidance.h>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/algorithms/avoidance/local_avoidance.h>
     PRIVATE
     core/local_map.cc
     core/path.cc
     core/target_report.cc
     algorithms/astar/planner.cc
-    algorithms/frontier/frontier.cc)
+    algorithms/frontier/frontier.cc
+    algorithms/avoidance/local_avoidance.cc)
 set_target_properties(drone_algo PROPERTIES OUTPUT_NAME drone_algo)
 target_include_directories(drone_algo
     PUBLIC
@@ -35,6 +38,10 @@ if(ENABLE_TESTING)
     MAKE_CC_TEST(
         NAME local_map_test
         SRCS tests/local_map_test.cc
+        DEPS drone_algo)
+    MAKE_CC_TEST(
+        NAME local_avoidance_test
+        SRCS tests/local_avoidance_test.cc
         DEPS drone_algo)
     MAKE_CC_TEST(
         NAME target_report_test
