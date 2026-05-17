@@ -10,10 +10,13 @@ TEST(TargetReportStoreTest, RecordsLatestObservedTarget) {
   EXPECT_TRUE(store.Record({{1, 2, 3}, 10, 7}));
 
   const auto latest = store.LatestReport();
-  ASSERT_TRUE(latest.has_value());
-  EXPECT_EQ(latest->position, (drone::Vec3i{1, 2, 3}));
-  EXPECT_EQ(latest->observed_at, 10);
-  EXPECT_EQ(latest->reporter_id, 7);
+  if (!latest.has_value()) {
+    FAIL() << "Expected latest target report";
+  }
+  const drone::TargetReport &report = *latest;
+  EXPECT_EQ(report.position, (drone::Vec3i{1, 2, 3}));
+  EXPECT_EQ(report.observed_at, 10);
+  EXPECT_EQ(report.reporter_id, 7);
 }
 
 TEST(TargetReportStoreTest, RejectsStaleReports) {
@@ -24,9 +27,12 @@ TEST(TargetReportStoreTest, RejectsStaleReports) {
   EXPECT_FALSE(store.Record({{3, 0, 0}, 20, 3}));
 
   const auto latest = store.LatestReport();
-  ASSERT_TRUE(latest.has_value());
-  EXPECT_EQ(latest->position, (drone::Vec3i{1, 0, 0}));
-  EXPECT_EQ(latest->reporter_id, 1);
+  if (!latest.has_value()) {
+    FAIL() << "Expected latest target report";
+  }
+  const drone::TargetReport &report = *latest;
+  EXPECT_EQ(report.position, (drone::Vec3i{1, 0, 0}));
+  EXPECT_EQ(report.reporter_id, 1);
 }
 
 TEST(TargetReportStoreTest, MergePropagatesNewestReportAcrossStores) {
@@ -40,10 +46,13 @@ TEST(TargetReportStoreTest, MergePropagatesNewestReportAcrossStores) {
   EXPECT_EQ(command.Merge(relay.ExtractReportsSince(0)), 1);
 
   const auto command_report = command.LatestReport();
-  ASSERT_TRUE(command_report.has_value());
-  EXPECT_EQ(command_report->position, (drone::Vec3i{4, 5, 6}));
-  EXPECT_EQ(command_report->observed_at, 30);
-  EXPECT_EQ(command_report->reporter_id, 42);
+  if (!command_report.has_value()) {
+    FAIL() << "Expected latest target report";
+  }
+  const drone::TargetReport &report = *command_report;
+  EXPECT_EQ(report.position, (drone::Vec3i{4, 5, 6}));
+  EXPECT_EQ(report.observed_at, 30);
+  EXPECT_EQ(report.reporter_id, 42);
 }
 
 TEST(TargetReportStoreTest, ExtractsOnlyReportsNewerThanTimestamp) {
@@ -65,7 +74,9 @@ TEST(TargetReportStoreTest, MergeCountsOnlyChangedReports) {
 
   EXPECT_EQ(changed, 2);
   const auto latest = store.LatestReport();
-  ASSERT_TRUE(latest.has_value());
+  if (!latest.has_value()) {
+    FAIL() << "Expected latest target report";
+  }
   EXPECT_EQ(latest->position, (drone::Vec3i{3, 0, 0}));
 }
 

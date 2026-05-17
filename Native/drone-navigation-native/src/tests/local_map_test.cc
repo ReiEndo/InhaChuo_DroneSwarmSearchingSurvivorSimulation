@@ -8,8 +8,11 @@ namespace {
 
 drone::CellState StateAt(const drone::LocalMap &map, drone::Vec3i position) {
   const auto cell = map.GetCell(position);
-  EXPECT_TRUE(cell.has_value());
-  return cell->state;
+  if (!cell.has_value()) {
+    ADD_FAILURE() << "Expected observed cell";
+    return drone::CellState::kUnknown;
+  }
+  return cell.value().state;
 }
 
 } // namespace
@@ -35,9 +38,12 @@ TEST(LocalMapTest, NewerObservationReplacesOlderState) {
   EXPECT_TRUE(map.ObserveCell({0, 0, 0}, drone::CellState::kBlocked, 11));
 
   const auto cell = map.GetCell({0, 0, 0});
-  ASSERT_TRUE(cell.has_value());
-  EXPECT_EQ(cell->state, drone::CellState::kBlocked);
-  EXPECT_EQ(cell->observed_at, 11);
+  if (!cell.has_value()) {
+    FAIL() << "Expected observed cell";
+  }
+  const drone::CellStateUpdate &update = *cell;
+  EXPECT_EQ(update.state, drone::CellState::kBlocked);
+  EXPECT_EQ(update.observed_at, 11);
 }
 
 TEST(LocalMapTest, StaleUpdatesDoNotReplaceCurrentObservation) {
@@ -48,9 +54,12 @@ TEST(LocalMapTest, StaleUpdatesDoNotReplaceCurrentObservation) {
   EXPECT_FALSE(map.ObserveCell({0, 0, 0}, drone::CellState::kBlocked, 50));
 
   const auto cell = map.GetCell({0, 0, 0});
-  ASSERT_TRUE(cell.has_value());
-  EXPECT_EQ(cell->state, drone::CellState::kTarget);
-  EXPECT_EQ(cell->observed_at, 50);
+  if (!cell.has_value()) {
+    FAIL() << "Expected observed cell";
+  }
+  const drone::CellStateUpdate &update = *cell;
+  EXPECT_EQ(update.state, drone::CellState::kTarget);
+  EXPECT_EQ(update.observed_at, 50);
 }
 
 TEST(LocalMapTest, MergeFiltersOutOfBoundsUpdates) {
