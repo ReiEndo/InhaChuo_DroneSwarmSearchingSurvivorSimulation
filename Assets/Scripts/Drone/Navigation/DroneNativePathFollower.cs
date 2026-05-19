@@ -75,9 +75,9 @@ public sealed class DroneNativePathFollower : MonoBehaviour
         var states = new int[knownCells.Length];
         for (int i = 0; i < states.Length; i++)
         {
-            states[i] = (int)DroneNative.CellState.Free;
+            states[i] = DroneNative.ToNativeCellState(DroneCellState.Free);
         }
-        states[GridIndex(goalCell)] = (int)DroneNative.CellState.Target;
+        states[GridIndex(goalCell)] = DroneNative.ToNativeCellState(DroneCellState.Target);
 
         path = new DroneNative.DroneVec3i[maxPathLength];
         pathCount = DroneNative.DronePlanKnownPath(

@@ -23,10 +23,10 @@ public sealed class DroneNativeExample : MonoBehaviour
         var states = new int[knownCells.Length];
         for (int i = 0; i < states.Length; i++)
         {
-            states[i] = (int)DroneNative.CellState.Free;
+            states[i] = DroneNative.ToNativeCellState(DroneCellState.Free);
         }
 
-        states[^1] = (int)DroneNative.CellState.Target;
+        states[^1] = DroneNative.ToNativeCellState(DroneCellState.Target);
 
         var pathBuffer = new DroneNative.DroneVec3i[128];
 

@@ -1,6 +1,7 @@
 #include "path.h"
 
 #include "../algorithms/astar/planner.h"
+#include "../algorithms/theta_star/planner.h"
 
 #include <limits>
 
@@ -24,6 +25,8 @@ std::unique_ptr<IPathPlanner> CreatePathPlanner(PlannerType type) {
   switch (type) {
   case PlannerType::kAStar:
     return std::make_unique<algorithms::astar::Planner>();
+  case PlannerType::kThetaStar:
+    return std::make_unique<algorithms::theta_star::Planner>();
   }
   return nullptr;
 }
