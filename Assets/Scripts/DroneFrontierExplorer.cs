@@ -15,6 +15,11 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     [SerializeField] private float goalSwitchImprovementRatio = 0.6f;
     [SerializeField] private float recentGoalPenaltySeconds = 8f;
     [SerializeField] private float recentGoalPenaltyDistance = 16f;
+    [SerializeField] private float travelCostWeight = 1f;
+    [SerializeField] private float informationGainWeight = 4f;
+    [SerializeField] private int informationGainRadius = 2;
+    [SerializeField] private float sameGoalPenalty = 25f;
+    [SerializeField] private float nearbyDronePenaltyRadius = 6f;
 
     [Header("Movement")]
     [SerializeField] private bool followPath = true;
@@ -120,6 +125,11 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         goalSwitchImprovementRatio = Mathf.Clamp01(goalSwitchImprovementRatio);
         recentGoalPenaltySeconds = Mathf.Max(0f, recentGoalPenaltySeconds);
         recentGoalPenaltyDistance = Mathf.Max(0f, recentGoalPenaltyDistance);
+        travelCostWeight = Mathf.Max(0f, travelCostWeight);
+        informationGainWeight = Mathf.Max(0f, informationGainWeight);
+        informationGainRadius = Mathf.Max(1, informationGainRadius);
+        sameGoalPenalty = Mathf.Max(0f, sameGoalPenalty);
+        nearbyDronePenaltyRadius = Mathf.Max(0f, nearbyDronePenaltyRadius);
         moveSpeed = Mathf.Max(0f, moveSpeed);
         arriveDistance = Mathf.Max(0.001f, arriveDistance);
     }
@@ -306,7 +316,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             var candidate = frontierCandidates[(startIndex + offset) % candidateCount];
             if (hasGoal
                 && IsCommittedToCurrentGoal()
-                && candidate.DistanceSquared >= currentGoalDistanceSquared * goalSwitchImprovementRatio)
+                && candidate.RawDistanceSquared >= currentGoalDistanceSquared * goalSwitchImprovementRatio)
             {
                 continue;
             }
@@ -336,14 +346,80 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
                 continue;
             }
 
-            float rawDistance = SquaredDistance(startCell, observation.Cell);
-            float rankedDistance = rawDistance + GetRecentGoalPenalty(observation.Cell);
-            frontierCandidates.Add(new FrontierCandidate(observation.Cell, rankedDistance, rawDistance));
+            float travelCost = SquaredDistance(startCell, observation.Cell);
+            float informationGain = EstimateInformationGain(observation.Cell);
+            float recentPenalty = GetRecentGoalPenalty(observation.Cell);
+            float swarmPenalty = EstimateSwarmOverlapPenalty(observation.Cell);
+            float score = travelCostWeight * travelCost
+                - informationGainWeight * informationGain
+                + recentPenalty
+                + swarmPenalty;
+            frontierCandidates.Add(new FrontierCandidate(observation.Cell, score, travelCost));
         }
 
         frontierCandidates.Sort(static (left, right) =>
-            left.DistanceSquared.CompareTo(right.DistanceSquared)
+            left.Score.CompareTo(right.Score)
         );
+    }
+
+    private float EstimateInformationGain(DroneNative.DroneVec3i center)
+    {
+        int gain = 0;
+
+        for (int dz = -informationGainRadius; dz <= informationGainRadius; dz++)
+        {
+            for (int dy = -informationGainRadius; dy <= informationGainRadius; dy++)
+            {
+                for (int dx = -informationGainRadius; dx <= informationGainRadius; dx++)
+                {
+                    var cell = new DroneNative.DroneVec3i(
+                        center.x + dx,
+                        center.y + dy,
+                        center.z + dz
+                    );
+
+                    if (world.IsInBounds(cell)
+                        && agentState.LocalMap.GetState(cell) == DroneCellState.Unknown)
+                    {
+                        gain++;
+                    }
+                }
+            }
+        }
+
+        return gain;
+    }
+
+    private float EstimateSwarmOverlapPenalty(DroneNative.DroneVec3i candidate)
+    {
+        if (nearbyDronePenaltyRadius <= 0f || sameGoalPenalty <= 0f)
+        {
+            return 0f;
+        }
+
+        float penalty = 0f;
+        float radiusSquared = nearbyDronePenaltyRadius * nearbyDronePenaltyRadius;
+        var agents = FindObjectsByType<DroneSwarmAgentState>(FindObjectsSortMode.None);
+        foreach (var other in agents)
+        {
+            if (other == agentState)
+            {
+                continue;
+            }
+
+            var otherExplorer = other.GetComponent<DroneFrontierExplorer>();
+            if (otherExplorer == null || !otherExplorer.HasGoal)
+            {
+                continue;
+            }
+
+            if (SquaredDistance(candidate, otherExplorer.CurrentGoal) <= radiusSquared)
+            {
+                penalty += sameGoalPenalty;
+            }
+        }
+
+        return penalty;
     }
 
     private bool TryPlanPath(
@@ -502,17 +578,17 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private readonly struct FrontierCandidate
     {
         public readonly DroneNative.DroneVec3i Cell;
-        public readonly float DistanceSquared;
+        public readonly float Score;
         public readonly float RawDistanceSquared;
 
         public FrontierCandidate(
             DroneNative.DroneVec3i cell,
-            float distanceSquared,
+            float score,
             float rawDistanceSquared
         )
         {
             Cell = cell;
-            DistanceSquared = distanceSquared;
+            Score = score;
             RawDistanceSquared = rawDistanceSquared;
         }
     }
