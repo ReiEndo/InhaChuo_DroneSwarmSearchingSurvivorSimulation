@@ -13,8 +13,8 @@ public struct DronePlannerInputSnapshot
         int knownCount
     )
     {
-        KnownCells = knownCells;
-        KnownStates = knownStates;
+        KnownCells = knownCells != null ? (DroneNative.DroneVec3i[])knownCells.Clone() : null;
+        KnownStates = knownStates != null ? (int[])knownStates.Clone() : null;
         KnownCount = knownCount;
     }
 }

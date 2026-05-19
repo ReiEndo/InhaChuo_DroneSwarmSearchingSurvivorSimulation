@@ -273,12 +273,6 @@ public sealed class DroneLocalMap
 
     public static int ToNativeState(DroneCellState state)
     {
-        return state switch
-        {
-            DroneCellState.Free => (int)DroneNative.CellState.Free,
-            DroneCellState.Blocked => (int)DroneNative.CellState.Blocked,
-            DroneCellState.Target => (int)DroneNative.CellState.Target,
-            _ => (int)DroneNative.CellState.Unknown,
-        };
+        return DroneNative.ToNativeCellState(state);
     }
 }
