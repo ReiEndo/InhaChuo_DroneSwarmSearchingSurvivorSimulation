@@ -22,6 +22,7 @@ target_sources(drone_algo
     algorithms/astar/planner.cc
     algorithms/theta_star/planner.cc
     algorithms/frontier/frontier.cc
+    algorithms/frontier/frontier_c_api.cc
     algorithms/avoidance/local_avoidance.cc)
 set_target_properties(drone_algo PROPERTIES OUTPUT_NAME drone_algo)
 target_include_directories(drone_algo
