@@ -90,7 +90,7 @@ public sealed class DronePathFollower : MonoBehaviour
             return;
         }
 
-        Vector3 destination = world.GridToWorld(path[pathIndex], transform.position.y);
+        Vector3 destination = world.GridToWorld(path[pathIndex], 0.35f);
         Vector3 toDestination = destination - transform.position;
         Vector3 preferredVelocity = toDestination.sqrMagnitude > Mathf.Epsilon
             ? toDestination.normalized * moveSpeed
@@ -120,7 +120,7 @@ public sealed class DronePathFollower : MonoBehaviour
     {
         while (pathIndex < usablePathCount)
         {
-            Vector3 destination = world.GridToWorld(path[pathIndex], transform.position.y);
+            Vector3 destination = world.GridToWorld(path[pathIndex], 0.35f);
             if (Vector3.Distance(transform.position, destination) > arriveDistance)
             {
                 return;
@@ -137,7 +137,7 @@ public sealed class DronePathFollower : MonoBehaviour
             return;
         }
 
-        Vector3 currentDestination = world.GridToWorld(path[pathIndex], transform.position.y);
+        Vector3 currentDestination = world.GridToWorld(path[pathIndex], 0.35f);
         Vector3 currentOffset = currentDestination - transform.position;
         if (Vector3.Distance(transform.position, currentDestination) <= arriveDistance
             || (currentDestination == previousDestination

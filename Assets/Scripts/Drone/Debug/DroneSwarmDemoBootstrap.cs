@@ -18,6 +18,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     [SerializeField] private int droneCount = 5;
     [SerializeField] private int sensorRadius = 2;
     [SerializeField] private float communicationRadius = 3.25f;
+    [SerializeField] private float droneSpeed = 3f;
     [SerializeField] private DroneNative.PlannerType plannerType = DroneNative.PlannerType.AStar;
 
     private readonly List<DroneFrontierExplorer> explorers = new();
@@ -37,6 +38,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private Slider droneCountSlider;
     private Text mapViewButtonText;
     private Text droneViewButtonText;
+    private Text cameraViewButtonText;
+    private RawImage droneCameraView;
+    private RenderTexture droneCameraTexture;
+    private readonly List<Camera> droneCameras = new();
+    private int selectedCameraIndex = -1;
     private bool resetQueued;
 
     public void ResetDemo()
@@ -69,6 +75,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
     private void Update() => UpdateStatusText();
 
+    private void OnDestroy() => ReleaseDroneCameraTexture();
+
     private void OnValidate()
     {
         width = Mathf.Max(4, width);
@@ -77,6 +85,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         droneCount = Mathf.Clamp(droneCount, 1, 12);
         sensorRadius = Mathf.Clamp(sensorRadius, 1, 8);
         communicationRadius = Mathf.Max(0f, communicationRadius);
+        droneSpeed = Mathf.Max(0f, droneSpeed);
     }
 
     private void ClearRuntimeState()
@@ -85,12 +94,17 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         explorers.Clear();
         communicationNodes.Clear();
         directTargetReporterIds.Clear();
+        droneCameras.Clear();
+        selectedCameraIndex = -1;
+        ReleaseDroneCameraTexture();
     }
 
     private void BuildWorld()
     {
         var result = new DroneDemoWorldBuilder(RegisterSpawned).Build(width, depth, cellSize, c_ObstacleLayer, c_TargetLayer, c_NonSensedLayer);
         world = result.World;
+        width = world.Width;
+        depth = world.Depth;
         communicationHub = result.CommunicationHub;
     }
 
@@ -111,6 +125,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         communicationNodes.AddRange(result.CommunicationNodes);
         commandState = result.CommandState;
         commandRoutePlanner = result.CommandRoutePlanner;
+        ApplyDroneSpeed();
+        BuildDroneCameras();
     }
 
     private void BuildDebugRenderer()
@@ -127,14 +143,17 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             SensorRadius = sensorRadius,
             CommunicationRadius = communicationRadius,
             DroneCount = droneCount,
+            DroneSpeed = droneSpeed,
             PlannerLabel = PlannerLabel(),
             MapViewLabel = MapViewLabel(),
             PlannerClicked = HandlePlannerClicked,
             SensorRadiusChanged = value => { sensorRadius = value; ApplySensorRadius(); },
             CommunicationRadiusChanged = value => { communicationRadius = value; ApplyCommunicationRadius(); },
             DroneCountChanged = value => droneCount = value,
+            DroneSpeedChanged = value => { droneSpeed = value; ApplyDroneSpeed(); },
             MapViewClicked = HandleMapViewClicked,
             DroneViewClicked = HandleDroneViewClicked,
+            CameraViewClicked = HandleCameraViewClicked,
             ResetClicked = ResetDemo,
         });
 
@@ -145,6 +164,9 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         droneCountSlider = ui.DroneCountSlider;
         mapViewButtonText = ui.MapViewButtonText;
         droneViewButtonText = ui.DroneViewButtonText;
+        cameraViewButtonText = ui.CameraViewButtonText;
+        droneCameraView = ui.DroneCameraView;
+        ConfigureDroneCameraView();
     }
 
     private void HandlePlannerClicked(Text clickedButtonText)
@@ -220,6 +242,98 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         }
     }
 
+    private void ApplyDroneSpeed()
+    {
+        foreach (var explorer in explorers)
+        {
+            if (explorer != null && explorer.TryGetComponent<DronePathFollower>(out var follower))
+            {
+                follower.MoveSpeed = droneSpeed;
+            }
+        }
+    }
+
+    private void BuildDroneCameras()
+    {
+        droneCameras.Clear();
+        for (int i = 0; i < explorers.Count; i++)
+        {
+            var explorer = explorers[i];
+            if (explorer == null)
+            {
+                continue;
+            }
+
+            var cameraObject = new GameObject($"Drone {i + 1:00} Camera");
+            RegisterSpawned(cameraObject);
+            cameraObject.transform.SetParent(explorer.transform, false);
+            cameraObject.transform.localPosition = new Vector3(0f, 0.45f, 0.15f);
+            cameraObject.transform.localRotation = Quaternion.Euler(18f, 0f, 0f);
+            var camera = cameraObject.AddComponent<Camera>();
+            camera.enabled = false;
+            camera.fieldOfView = 75f;
+            camera.nearClipPlane = 0.03f;
+            camera.farClipPlane = 250f;
+            camera.clearFlags = CameraClearFlags.Skybox;
+            droneCameras.Add(camera);
+        }
+    }
+
+    private void HandleCameraViewClicked()
+    {
+        if (droneCameras.Count == 0)
+        {
+            selectedCameraIndex = -1;
+        }
+        else
+        {
+            selectedCameraIndex = (selectedCameraIndex + 1) % droneCameras.Count;
+        }
+
+        ConfigureDroneCameraView();
+    }
+
+    private void ConfigureDroneCameraView()
+    {
+        if (droneCameraView == null)
+        {
+            return;
+        }
+
+        if (droneCameraTexture == null)
+        {
+            droneCameraTexture = new RenderTexture(480, 270, 16, RenderTextureFormat.ARGB32);
+            droneCameraTexture.name = "Drone Camera View Texture";
+        }
+
+        for (int i = 0; i < droneCameras.Count; i++)
+        {
+            if (droneCameras[i] != null)
+            {
+                droneCameras[i].enabled = i == selectedCameraIndex;
+                droneCameras[i].targetTexture = i == selectedCameraIndex ? droneCameraTexture : null;
+            }
+        }
+
+        bool show = selectedCameraIndex >= 0 && selectedCameraIndex < droneCameras.Count;
+        droneCameraView.enabled = show;
+        droneCameraView.texture = show ? droneCameraTexture : null;
+        if (cameraViewButtonText != null)
+        {
+            cameraViewButtonText.text = show ? $"Cam D{selectedCameraIndex + 1:00}" : "Cam";
+        }
+    }
+
+    private void ReleaseDroneCameraTexture()
+    {
+        if (droneCameraTexture != null)
+        {
+            droneCameraTexture.Release();
+            Destroy(droneCameraTexture);
+            droneCameraTexture = null;
+        }
+    }
+
     private void UpdateStatusText()
     {
         if (statusText == null)
@@ -235,7 +349,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         string route = commandRoutePlanner != null && commandRoutePlanner.HasRoute ? commandRoutePlanner.RouteCount.ToString() : "none";
         int links = communicationHub != null ? communicationHub.ActiveLinks.Count : 0;
         string mapView = debugRenderer != null ? debugRenderer.CurrentMapViewLabel : "Merged";
-        statusText.text = $"Planner: {plannerType}  Map: {mapView}\nSensor: {sensorRadius}  Comms: {communicationRadius:0.0}\nDrones: {droneCount}  Links: {links}\nCommand known: {knownCells}\nTarget found: {swarmTarget}  Command: {commandTarget}\nRoute: {route}";
+        string cameraView = selectedCameraIndex >= 0 ? $"D{selectedCameraIndex + 1:00}" : "off";
+        statusText.text = $"Planner: {plannerType}  Map: {mapView}\nSensor: {sensorRadius}  Comms: {communicationRadius:0.0}\nDrones: {droneCount}  Speed: {droneSpeed:0.0}  Links: {links}\nCamera: {cameraView}\nCommand known: {knownCells}\nTarget found: {swarmTarget}  Command: {commandTarget}\nRoute: {route}";
     }
 
     private string PlannerLabel() => plannerType == DroneNative.PlannerType.ThetaStar ? "Theta*" : "A*";

@@ -271,6 +271,22 @@ public sealed class DroneLocalMap
         return x + width * (y + height * z);
     }
 
+    public bool TryCellFromGridIndex(int index, out DroneNative.DroneVec3i cell)
+    {
+        if (index < 0 || index >= states.Length)
+        {
+            cell = default;
+            return false;
+        }
+
+        cell = new DroneNative.DroneVec3i(
+            index % width,
+            (index / width) % height,
+            index / (width * height)
+        );
+        return true;
+    }
+
     public static int ToNativeState(DroneCellState state)
     {
         return DroneNative.ToNativeCellState(state);

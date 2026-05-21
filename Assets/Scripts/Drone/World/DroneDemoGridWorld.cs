@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 public sealed class DroneDemoGridWorld : MonoBehaviour
@@ -13,6 +14,9 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
     [SerializeField] private LayerMask blockedLayers = 0;
     [SerializeField] private LayerMask targetLayers = 0;
     [SerializeField] private float cellProbeRadiusScale = 0.35f;
+
+    private readonly HashSet<int> terrainTreeBlockedCells = new();
+    private Terrain surfaceTerrain;
 
     public Vector3 GridOrigin => gridOrigin;
     public float CellSize => cellSize;
@@ -37,6 +41,46 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
         depth = Mathf.Max(1, newDepth);
         blockedLayers = newBlockedLayers;
         targetLayers = newTargetLayers;
+        terrainTreeBlockedCells.Clear();
+    }
+
+    public void SetTerrainTreeAvoidance(Terrain terrain, float treeRadiusCells = 1f)
+    {
+        surfaceTerrain = terrain;
+        terrainTreeBlockedCells.Clear();
+        if (terrain == null || terrain.terrainData == null)
+        {
+            return;
+        }
+
+        TerrainData terrainData = terrain.terrainData;
+        Vector3 terrainOrigin = terrain.transform.position;
+        float radius = Mathf.Max(0f, treeRadiusCells) * cellSize;
+        int radiusCells = Mathf.CeilToInt(radius / cellSize);
+
+        foreach (TreeInstance tree in terrainData.treeInstances)
+        {
+            Vector3 treeWorld = terrainOrigin + Vector3.Scale(tree.position, terrainData.size);
+            var centerCell = WorldToGrid(treeWorld);
+            for (int dz = -radiusCells; dz <= radiusCells; dz++)
+            {
+                for (int dx = -radiusCells; dx <= radiusCells; dx++)
+                {
+                    var cell = new DroneNative.DroneVec3i(centerCell.x + dx, 0, centerCell.z + dz);
+                    if (!IsInBounds(cell))
+                    {
+                        continue;
+                    }
+
+                    Vector3 cellWorld = GridToWorld(cell, treeWorld.y);
+                    var delta = new Vector2(cellWorld.x - treeWorld.x, cellWorld.z - treeWorld.z);
+                    if (delta.sqrMagnitude <= radius * radius + 0.0001f)
+                    {
+                        terrainTreeBlockedCells.Add(CellKey(cell));
+                    }
+                }
+            }
+        }
     }
 
     private void OnValidate()
@@ -60,11 +104,15 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
 
     public Vector3 GridToWorld(DroneNative.DroneVec3i cell, float worldY)
     {
-        return new Vector3(
-            gridOrigin.x + cell.x * cellSize,
-            worldY,
-            gridOrigin.z + cell.z * cellSize
-        );
+        float x = gridOrigin.x + cell.x * cellSize;
+        float z = gridOrigin.z + cell.z * cellSize;
+        float y = worldY;
+        if (surfaceTerrain != null && surfaceTerrain.terrainData != null)
+        {
+            y = surfaceTerrain.transform.position.y + surfaceTerrain.SampleHeight(new Vector3(x, 0f, z)) + worldY;
+        }
+
+        return new Vector3(x, y, z);
     }
 
     public bool IsInBounds(DroneNative.DroneVec3i cell)
@@ -81,13 +129,32 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
             return DroneCellState.Unknown;
         }
 
-        Vector3 center = GridToWorld(cell, gridOrigin.y + cell.y * cellSize);
+        Vector3 center = GridToWorld(cell, cell.y * cellSize + 0.9f);
         float probeRadius = Mathf.Max(0.01f, cellSize * cellProbeRadiusScale);
+        float targetProbeRadius = Mathf.Max(probeRadius, 1.25f);
+
+        if (targetLayers.value != 0)
+        {
+            foreach (Collider hit in Physics.OverlapSphere(center, targetProbeRadius, targetLayers, QueryTriggerInteraction.Collide))
+            {
+                if (WorldToGrid(hit.transform.position).x == cell.x && WorldToGrid(hit.transform.position).z == cell.z)
+                {
+                    return DroneCellState.Target;
+                }
+            }
+        }
+
+        center = GridToWorld(cell, cell.y * cellSize + 0.35f);
 
         if (targetLayers.value != 0
             && Physics.CheckSphere(center, probeRadius, targetLayers, QueryTriggerInteraction.Collide))
         {
             return DroneCellState.Target;
+        }
+
+        if (terrainTreeBlockedCells.Contains(CellKey(cell)))
+        {
+            return DroneCellState.Blocked;
         }
 
         if (blockedLayers.value != 0
@@ -98,6 +165,8 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
 
         return DroneCellState.Free;
     }
+
+    private int CellKey(DroneNative.DroneVec3i cell) => (cell.y * depth + cell.z) * width + cell.x;
 
     private void OnDrawGizmosSelected()
     {
