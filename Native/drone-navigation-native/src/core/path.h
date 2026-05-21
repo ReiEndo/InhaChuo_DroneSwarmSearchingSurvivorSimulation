@@ -35,6 +35,7 @@ enum class CellState : std::int32_t {
 struct CellStateUpdate {
   Vec3i position;
   CellState state;
+  std::int64_t observed_at = 0;
 };
 
 struct PathRequest {
@@ -60,6 +61,7 @@ public:
 
 enum class PlannerType : std::int32_t {
   kAStar = 0,
+  kThetaStar = 1,
 };
 
 std::unique_ptr<IPathPlanner> CreatePathPlanner(PlannerType type);
@@ -77,6 +79,7 @@ struct DroneVec3i {
 
 enum DronePlannerType : std::int32_t {
   DRONE_PLANNER_ASTAR = 0,
+  DRONE_PLANNER_THETA_STAR = 1,
 };
 
 enum DroneCellState : std::int32_t {
