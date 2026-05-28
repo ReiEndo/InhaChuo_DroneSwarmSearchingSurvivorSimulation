@@ -67,6 +67,6 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "InhaChuo_MapDemo0513.slnx",
+    "dotnet.defaultSolution": "My project (3).slnx",
     "dotnet.enableWorkspaceBasedDevelopment": false
 }

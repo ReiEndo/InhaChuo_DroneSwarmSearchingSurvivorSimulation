@@ -2,179 +2,146 @@ using UnityEngine;
 
 public class Explorer : MonoBehaviour
 {
-    private Animator animator;
-
     [Header("Terrain")]
     public Terrain terrain;
 
+    private Animator animator;
+
     [Header("探索")]
-    public float searchRadius = 20f;
+    public float scanRadius = 20f;
     public float moveSpeed = 3f;
-    public float arriveDistance = 1.5f;
 
-    [Header("体力")]
-    [Range(0, 100)]
-    public float stamina = 100f;
 
-    public float staminaDecreasePerSecond = 5f;
-    public float staminaRecoveryPerSecond = 10f;
+    //public int mapSizeX = 500;
+    //public int mapSizeZ = 500;
 
-    public float restartThreshold = 30f;
+    //private bool[,] discovered;
 
-    [Header("障害物")]
-    public LayerMask obstacleMask;
-
-    public float obstacleDetectDistance = 2f;
-
-    [Header("ランダム")]
-    public int randomSeed = 12345;
+    public float obstacleCheckDistance = 2f;
 
     private Vector3 targetPosition;
 
-    private AIState currentState;
+    private bool hasTarget = false;
+    private CharacterController controller;//移動方法にCharacterController.Moveを採用
+    private float verticalVelocity;//重力用
+    public LayerMask obstacleMask;//地面の障害物判定を除外
+    private float avoidTimer = 0f;//回避と目標地点に移動、2つの状態に分離
+    //private float avoidDirection;//回避回転の左右ランダム化
+    private bool isAvoiding = false;//回避開始時だけ回転するようフラッグ
+    private Quaternion avoidRotation;//瞬時に回転しないよう
 
-    private enum AIState
-    {
-        Moving,
-        Resting
-    }
 
     void Start()
     {
-        animator = GetComponentInChildren<Animator>();
+        //discovered = new bool[mapSizeX, mapSizeZ];
 
-        Random.InitState(randomSeed);
+        animator = GetComponent<Animator>();
 
-        currentState = AIState.Moving;
-
-        SetRandomDestination();
+        controller = GetComponent<CharacterController>();
     }
 
     void Update()
     {
-        switch (currentState)
+        //ScanAround();
+
+        if(!hasTarget)
         {
-            case AIState.Moving:
-                UpdateMoving();
-                break;
-
-            case AIState.Resting:
-                UpdateResting();
-                break;
-        }
-    }
-
-    void UpdateMoving()
-    {
-        animator.SetFloat("Speed", 2f);
-        animator.SetFloat("MotionSpeed", 1f);
-
-        stamina -= staminaDecreasePerSecond * Time.deltaTime;
-
-        stamina = Mathf.Clamp(stamina, 0, 100);
-
-        if (stamina <= 0)
-        {
-            animator.SetFloat("Speed", 0f);
-            animator.SetFloat("MotionSpeed", 0f);
-
-            currentState = AIState.Resting;
-            return;
-        }
-
-        if (HasObstacleAhead())
-        {
-            AvoidObstacle();
-            return;
+            FindUnknownTarget();
         }
 
         MoveToTarget();
-
-        float distance =
-            Vector3.Distance(
-                transform.position,
-                targetPosition
-            );
-
-        if (distance <= arriveDistance)
-        {
-            SetRandomDestination();
-        }
     }
 
-    void UpdateResting()
+    /*void ScanAround()
     {
-        animator.SetFloat("Speed", 0f);
-        animator.SetFloat("MotionSpeed", 0f);
-
-        stamina += staminaRecoveryPerSecond * Time.deltaTime;
-
-        stamina = Mathf.Clamp(stamina, 0, 100);
-
-        if (stamina >= restartThreshold)
+        Vector3 pos = transform.position;
+        int centerX = Mathf.RoundToInt(pos.x);
+        int centerZ = Mathf.RoundToInt(pos.z);
+        for (int x = centerX - (int)scanRadius; x <= centerX + (int)scanRadius; x++)
         {
-            currentState = AIState.Moving;
-
-            SetRandomDestination();
-        }
-    }
-
-    void MoveToTarget()
-    {
-        Vector3 direction =
-            (targetPosition - transform.position).normalized;
-
-        direction.y = 0;
-
-        Vector3 nextPosition =
-            transform.position +
-            direction *
-            moveSpeed *
-            Time.deltaTime;
-
-        nextPosition = ClampToTerrain(nextPosition);
-
-        transform.position = nextPosition;
-
-        if (direction != Vector3.zero)
-        {
-            transform.rotation =
-                Quaternion.Slerp(
-                    transform.rotation,
-                    Quaternion.LookRotation(direction),
-                    5f * Time.deltaTime
-                );
-        }
-
-        AdjustHeightToTerrain();
-    }
-
-    void SetRandomDestination()
-    {
-        for (int i = 0; i < 30; i++)
-        {
-            Vector2 randomCircle =
-                Random.insideUnitCircle * searchRadius;
-
-            Vector3 candidate =
-                transform.position +
-                new Vector3(
-                    randomCircle.x,
-                    0,
-                    randomCircle.y
-                );
-
-            candidate.y =
-                Terrain.activeTerrain.SampleHeight(candidate);
-
-            if (IsInsideTerrain(candidate) && IsValidPoint(candidate))
+            for (int z = centerZ - (int)scanRadius; z <= centerZ + (int)scanRadius; z++)
             {
-                targetPosition = candidate;
-                return;
+                if (x < 0 || z < 0 || x >= mapSizeX || z >= mapSizeZ) continue;
+                float dist = Vector2.Distance(
+                    new Vector2(centerX, centerZ),
+                    new Vector2(x, z)
+                );
+                if (dist <= scanRadius)
+                {
+                    discovered[x, z] = true;
+                }
             }
         }
+    }*/
 
-        targetPosition = transform.position;
+    bool IsObstacleAhead()
+    {
+        Vector3 origin =
+            transform.position + Vector3.up * 1.5f;
+
+        Vector3 forward = transform.forward;
+
+        Vector3 leftDir =
+            Quaternion.Euler(0, -30, 0) * forward;
+
+        Vector3 rightDir =
+            Quaternion.Euler(0, 30, 0) * forward;
+
+        Debug.DrawRay(origin, forward * obstacleCheckDistance, Color.red);
+
+        Debug.DrawRay(origin, leftDir * obstacleCheckDistance, Color.yellow);
+
+        Debug.DrawRay(origin, rightDir * obstacleCheckDistance, Color.cyan);
+
+        if (Physics.Raycast(origin, forward,obstacleCheckDistance, obstacleMask))
+            return true;
+
+        if (Physics.Raycast(origin, leftDir, obstacleCheckDistance, obstacleMask))
+            return true;
+
+        if (Physics.Raycast(origin, rightDir, obstacleCheckDistance, obstacleMask))
+            return true;
+
+        return false;
+    }
+
+    void FindUnknownTarget()
+    {
+    /*for(int i=0; i<10; i++)
+    {*/
+        //int x = Random.Range(0, mapSizeX);
+        //int z = Random.Range(0, mapSizeZ);
+        Vector2 randomCircle = Random.insideUnitCircle * scanRadius;
+
+        Vector3 target = 
+            transform.position + 
+            new Vector3(randomCircle.x, 0 , randomCircle.y);
+
+        target.y = Terrain.activeTerrain.SampleHeight(target);
+
+        if(IsInsideTerrain(target) && IsValidPoint(target)) 
+        {
+            hasTarget = true;
+            targetPosition = target;
+
+            return;
+        }
+
+        /*if (discovered[x, z] == false)
+        {
+            Vector3 worldPos = new Vector3(x, 0, z);
+
+            float y = terrain.SampleHeight(worldPos);
+
+            y += terrain.transform.position.y;
+
+            targetPosition = new Vector3(x, y, z);
+
+            hasTarget = true;
+
+            return;
+        }*/
+    /*}*/
     }
 
     bool IsInsideTerrain(Vector3 point)
@@ -194,27 +161,6 @@ public class Explorer : MonoBehaviour
         return insideX && insideZ;
     }
 
-    Vector3 ClampToTerrain(Vector3 position)
-    {
-        Vector3 terrainPos = terrain.transform.position;
-
-        Vector3 terrainSize = terrain.terrainData.size;
-
-        position.x = Mathf.Clamp(
-            position.x,
-            terrainPos.x,
-            terrainPos.x + terrainSize.x
-        );
-
-        position.z = Mathf.Clamp(
-            position.z,
-            terrainPos.z,
-            terrainPos.z + terrainSize.z
-        );
-
-        return position;
-    }
-
     bool IsValidPoint(Vector3 point)
     {
         float checkRadius = 1.2f;
@@ -229,78 +175,104 @@ public class Explorer : MonoBehaviour
         return !blocked;
     }
 
-    bool HasObstacleAhead()
+    void MoveToTarget()
     {
-        Vector3 highOrigin =
-            transform.position + Vector3.up * 1.5f;
+        if (avoidTimer > 0)
+        {
+            avoidTimer -= Time.deltaTime;
 
-        Vector3 lowOrigin =
-            transform.position + Vector3.up * 0.2f;
+            transform.rotation =
+                Quaternion.Slerp(
+                    transform.rotation,
+                    avoidRotation,
+                    3f * Time.deltaTime
+                );
 
-        bool highHit =
-            Physics.Raycast(
-                highOrigin,
-                transform.forward,
-                obstacleDetectDistance,
-                obstacleMask
+            Vector3 avoidMove =
+                transform.forward * moveSpeed;
+
+            avoidMove.y = verticalVelocity;
+
+            controller.Move(avoidMove * Time.deltaTime);
+
+            if (avoidTimer <= 0)
+            {
+                isAvoiding = false;
+            }
+
+            return;
+        }
+
+        if (IsObstacleAhead() && !isAvoiding)
+        {
+            /*回避ランダム化avoidDirection =
+                Random.value < 0.5f ? -1f : 1f;*/
+
+            avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + 45f /*+ avoidDirection * 60f*/, 0);
+
+            avoidTimer = 1.0f;
+
+            isAvoiding = true;
+        }
+        if (!hasTarget) return;
+        Vector3 currentPos = transform.position;
+
+        Vector3 targetDir =
+            targetPosition - transform.position;
+
+        targetDir.y = 0;
+
+        if (targetDir != Vector3.zero)
+        {
+            Quaternion targetRot =
+                Quaternion.LookRotation(targetDir);
+
+            transform.rotation =
+                Quaternion.Slerp(
+                    transform.rotation,
+                    targetRot,
+                    2f * Time.deltaTime
+                );
+        }
+
+        if (controller.isGrounded)
+        {
+            verticalVelocity = -1f;
+        }
+        else
+        {
+            verticalVelocity += Physics.gravity.y * Time.deltaTime;
+        }
+
+        Vector3 move =
+            transform.forward * moveSpeed;
+
+        move.y = verticalVelocity;
+
+        controller.Move(move * Time.deltaTime);
+
+        Vector3 dir = targetPosition - transform.position;
+
+        dir.y = 0;
+
+        if (dir != Vector3.zero)
+        {
+            transform.rotation = Quaternion.Slerp(
+                transform.rotation,
+                Quaternion.LookRotation(dir),
+                5f * Time.deltaTime
             );
-
-        bool lowHit =
-            Physics.Raycast(
-                lowOrigin,
-                transform.forward,
-                obstacleDetectDistance,
-                obstacleMask
-            );
-
-        return highHit || lowHit;
-    }
-
-    void AvoidObstacle()
-    {
-        Vector3 avoidDirection =
-            Quaternion.Euler(
-                0,
-                Random.Range(-120f, 120f),
-                0
-            ) * transform.forward;
-
-        targetPosition =
-            ClampToTerrain(
-                transform.position +
-                avoidDirection * 5f
-            );
-    }
-
-    void AdjustHeightToTerrain()
-    {
-        Vector3 position = transform.position;
-
-        position.y =
-            Terrain.activeTerrain.SampleHeight(position);
-
-        transform.position = position;
-    }
-
-    void OnDrawGizmos()
-    {
-        Gizmos.color = Color.green;
-
-        Gizmos.DrawWireSphere(
+        }
+        animator.SetFloat("Speed", moveSpeed);
+        animator.SetFloat("MotionSpeed", 1f);
+        float dist = Vector3.Distance(
             transform.position,
-            searchRadius
+            targetPosition
         );
 
-        Gizmos.color = Color.red;
-
-        Gizmos.DrawSphere(
-            targetPosition,
-            0.5f
-        );
-    }
-
-    public void OnFootstep()
-    {
-
+        if (dist < 1f)
+        {
+            hasTarget = false;
+        }
     }
 }
