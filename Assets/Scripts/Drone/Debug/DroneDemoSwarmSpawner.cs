@@ -16,6 +16,7 @@ public sealed class DroneDemoSwarmSpawner
         int width,
         int depth,
         int droneCount,
+        GameObject droneModelPrefab,
         int sensorRadius,
         float communicationRadius,
         DroneNative.PlannerType plannerType,
@@ -25,7 +26,7 @@ public sealed class DroneDemoSwarmSpawner
         var explorers = new List<DroneFrontierExplorer>();
         var communicationNodes = new List<DroneCommunicationNode>();
         var commandResult = BuildCommand(world, width, depth, communicationRadius, plannerType, nonSensedLayer, communicationNodes);
-        BuildDrones(world, width, depth, droneCount, sensorRadius, communicationRadius, plannerType, nonSensedLayer, targetSensedHandler, explorers, communicationNodes);
+        BuildDrones(world, width, depth, droneCount, droneModelPrefab, sensorRadius, communicationRadius, plannerType, nonSensedLayer, targetSensedHandler, explorers, communicationNodes);
         return new DroneDemoSwarmSpawnResult(explorers, communicationNodes, commandResult.CommandState, commandResult.CommandRoutePlanner);
     }
 
@@ -57,7 +58,7 @@ public sealed class DroneDemoSwarmSpawner
         return new CommandSpawnResult(commandState, routePlanner);
     }
 
-    private void BuildDrones(DroneDemoGridWorld world, int width, int depth, int droneCount, int sensorRadius, float communicationRadius, DroneNative.PlannerType plannerType, int nonSensedLayer, Action<DroneGridSensor, DroneNative.DroneVec3i> targetSensedHandler, List<DroneFrontierExplorer> explorers, List<DroneCommunicationNode> communicationNodes)
+    private void BuildDrones(DroneDemoGridWorld world, int width, int depth, int droneCount, GameObject droneModelPrefab, int sensorRadius, float communicationRadius, DroneNative.PlannerType plannerType, int nonSensedLayer, Action<DroneGridSensor, DroneNative.DroneVec3i> targetSensedHandler, List<DroneFrontierExplorer> explorers, List<DroneCommunicationNode> communicationNodes)
     {
         var starts = new[]
         {
@@ -99,14 +100,43 @@ public sealed class DroneDemoSwarmSpawner
             explorer.PlannerType = plannerType;
             explorers.Add(explorer);
 
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            Register(visual);
-            visual.name = "Drone Visual";
-            visual.layer = nonSensedLayer;
+            var visual = CreateDroneVisual(droneModelPrefab, nonSensedLayer);
             visual.transform.SetParent(drone.transform, false);
             visual.transform.localPosition = Vector3.zero;
-            visual.transform.localScale = Vector3.one * Mathf.Max(0.35f, motor.DroneRadius * 1.8f);
-            DroneDemoVisualUtility.SetRendererColor(visual, Color.Lerp(new Color(0.1f, 0.5f, 1f), new Color(0.1f, 1f, 0.65f), i / Mathf.Max(1f, count - 1f)));
+            visual.transform.localRotation = Quaternion.identity;
+            if (droneModelPrefab == null)
+            {
+                visual.transform.localScale = Vector3.one * Mathf.Max(0.35f, motor.DroneRadius * 1.8f);
+                DroneDemoVisualUtility.SetRendererColor(visual, Color.Lerp(new Color(0.1f, 0.5f, 1f), new Color(0.1f, 1f, 0.65f), i / Mathf.Max(1f, count - 1f)));
+            }
+        }
+    }
+
+    private GameObject CreateDroneVisual(GameObject droneModelPrefab, int nonSensedLayer)
+    {
+        GameObject visual;
+        if (droneModelPrefab != null)
+        {
+            visual = UnityEngine.Object.Instantiate(droneModelPrefab);
+            visual.name = "Drone Model";
+        }
+        else
+        {
+            visual = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            visual.name = "Drone Visual";
+        }
+
+        Register(visual);
+        SetLayerRecursively(visual, nonSensedLayer);
+        return visual;
+    }
+
+    private static void SetLayerRecursively(GameObject root, int layer)
+    {
+        root.layer = layer;
+        for (int i = 0; i < root.transform.childCount; i++)
+        {
+            SetLayerRecursively(root.transform.GetChild(i).gameObject, layer);
         }
     }
 

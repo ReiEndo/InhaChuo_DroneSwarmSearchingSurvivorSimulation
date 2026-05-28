@@ -23,7 +23,7 @@ public sealed class DroneDemoUiBuilder
         canvasObject.AddComponent<CanvasScaler>().uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         canvasObject.AddComponent<GraphicRaycaster>();
 
-        var panel = CreateUiPanel(canvasObject.transform, "Controls", new Vector2(320f, 330f), new Vector2(18f, -18f));
+        var panel = CreateUiPanel(canvasObject.transform, "Controls", new Vector2(320f, 210f), new Vector2(18f, -18f));
         var statusText = CreateText(panel.transform, "Status", 14, TextAnchor.UpperLeft);
         statusText.rectTransform.anchorMin = new Vector2(0f, 1f);
         statusText.rectTransform.anchorMax = new Vector2(1f, 1f);
@@ -36,43 +36,24 @@ public sealed class DroneDemoUiBuilder
         var plannerButtonText = plannerButton.GetComponentInChildren<Text>();
         plannerButton.onClick.AddListener(() => config.PlannerClicked?.Invoke(plannerButtonText));
 
-        var sensorSlider = CreateSlider(panel.transform, "Sensor", new Vector2(12f, -166f), 1f, 6f, config.SensorRadius);
-        sensorSlider.wholeNumbers = true;
-        sensorSlider.onValueChanged.AddListener(value => config.SensorRadiusChanged?.Invoke(Mathf.RoundToInt(value)));
-
-        var communicationSlider = CreateSlider(panel.transform, "Comms", new Vector2(12f, -196f), 0.5f, 8f, config.CommunicationRadius);
-        communicationSlider.onValueChanged.AddListener(value => config.CommunicationRadiusChanged?.Invoke(value));
-
-        var droneCountSlider = CreateSlider(panel.transform, "Drones", new Vector2(12f, -226f), 1f, 10f, config.DroneCount);
-        droneCountSlider.wholeNumbers = true;
-        droneCountSlider.onValueChanged.AddListener(value => config.DroneCountChanged?.Invoke(Mathf.RoundToInt(value)));
-
-        var droneSpeedSlider = CreateSlider(panel.transform, "Speed", new Vector2(12f, -256f), 0.5f, 10f, config.DroneSpeed);
-        droneSpeedSlider.onValueChanged.AddListener(value => config.DroneSpeedChanged?.Invoke(value));
-
-        CreateControlLabel(panel.transform, "Map", new Vector2(12f, -286f));
-        var mapViewButton = CreateButton(panel.transform, config.MapViewLabel, new Vector2(88f, -286f));
+        CreateControlLabel(panel.transform, "Map", new Vector2(12f, -166f));
+        var mapViewButton = CreateButton(panel.transform, config.MapViewLabel, new Vector2(88f, -166f));
         mapViewButton.GetComponent<RectTransform>().sizeDelta = new Vector2(92f, 28f);
         var mapViewButtonText = mapViewButton.GetComponentInChildren<Text>();
         mapViewButton.onClick.AddListener(() => config.MapViewClicked?.Invoke());
 
-        var droneViewButton = CreateButton(panel.transform, "Next", new Vector2(188f, -286f));
+        var droneViewButton = CreateButton(panel.transform, "Next", new Vector2(188f, -166f));
         droneViewButton.GetComponent<RectTransform>().sizeDelta = new Vector2(52f, 28f);
         var droneViewButtonText = droneViewButton.GetComponentInChildren<Text>();
         droneViewButton.onClick.AddListener(() => config.DroneViewClicked?.Invoke());
 
-        var cameraButton = CreateButton(panel.transform, "Cam", new Vector2(246f, -286f));
-        cameraButton.GetComponent<RectTransform>().sizeDelta = new Vector2(58f, 28f);
-        var cameraButtonText = cameraButton.GetComponentInChildren<Text>();
-        cameraButton.onClick.AddListener(() => config.CameraViewClicked?.Invoke());
-
-        var resetButton = CreateButton(panel.transform, "Reset", new Vector2(12f, -316f));
+        var resetButton = CreateButton(panel.transform, "Reset", new Vector2(246f, -166f));
         resetButton.GetComponent<RectTransform>().sizeDelta = new Vector2(64f, 28f);
         resetButton.onClick.AddListener(() => config.ResetClicked?.Invoke());
 
-        var cameraView = CreateDroneCameraView(canvasObject.transform);
+        var cameraGrid = CreateDroneCameraGrid(canvasObject.transform);
 
-        return new DroneDemoUiBuildResult(statusText, plannerButtonText, sensorSlider, communicationSlider, droneCountSlider, droneSpeedSlider, mapViewButtonText, droneViewButtonText, cameraButtonText, cameraView);
+        return new DroneDemoUiBuildResult(statusText, plannerButtonText, mapViewButtonText, droneViewButtonText, cameraGrid);
     }
 
     private GameObject Spawn(string objectName)
@@ -110,74 +91,22 @@ public sealed class DroneDemoUiBuilder
         return text;
     }
 
-    private static Slider CreateSlider(Transform parent, string label, Vector2 anchoredPosition, float min, float max, float value)
+    private static RectTransform CreateDroneCameraGrid(Transform parent)
     {
-        CreateControlLabel(parent, label, anchoredPosition);
-        var sliderObject = new GameObject($"{label} Slider", typeof(RectTransform), typeof(Slider));
-        sliderObject.transform.SetParent(parent, false);
-        var rect = sliderObject.GetComponent<RectTransform>();
-        rect.anchorMin = new Vector2(0f, 1f);
-        rect.anchorMax = new Vector2(0f, 1f);
-        rect.pivot = new Vector2(0f, 1f);
-        rect.sizeDelta = new Vector2(150f, 24f);
-        rect.anchoredPosition = anchoredPosition + new Vector2(76f, -2f);
-
-        var background = CreateSliderImage(sliderObject.transform, "Background", new Color(0.13f, 0.14f, 0.15f));
-        background.anchorMin = new Vector2(0f, 0.35f);
-        background.anchorMax = new Vector2(1f, 0.65f);
-
-        var fillArea = new GameObject("Fill Area", typeof(RectTransform));
-        fillArea.transform.SetParent(sliderObject.transform, false);
-        var fillAreaRect = fillArea.GetComponent<RectTransform>();
-        fillAreaRect.anchorMin = Vector2.zero;
-        fillAreaRect.anchorMax = Vector2.one;
-        fillAreaRect.offsetMin = Vector2.zero;
-        fillAreaRect.offsetMax = Vector2.zero;
-
-        var fill = CreateSliderImage(fillArea.transform, "Fill", new Color(0.1f, 0.55f, 0.9f));
-        fill.anchorMin = new Vector2(0f, 0.35f);
-        fill.anchorMax = new Vector2(1f, 0.65f);
-
-        var handle = CreateSliderImage(sliderObject.transform, "Handle", new Color(0.9f, 0.92f, 0.94f));
-        handle.sizeDelta = new Vector2(12f, 20f);
-
-        var slider = sliderObject.GetComponent<Slider>();
-        slider.minValue = min;
-        slider.maxValue = max;
-        slider.value = value;
-        slider.targetGraphic = handle.GetComponent<Image>();
-        slider.fillRect = fill;
-        slider.handleRect = handle;
-        return slider;
-    }
-
-    private static RectTransform CreateSliderImage(Transform parent, string objectName, Color color)
-    {
-        var imageObject = new GameObject(objectName, typeof(RectTransform), typeof(Image));
-        imageObject.transform.SetParent(parent, false);
-        var rect = imageObject.GetComponent<RectTransform>();
-        rect.anchorMin = Vector2.zero;
-        rect.anchorMax = Vector2.one;
-        rect.offsetMin = Vector2.zero;
-        rect.offsetMax = Vector2.zero;
-        imageObject.GetComponent<Image>().color = color;
-        return rect;
-    }
-
-    private static RawImage CreateDroneCameraView(Transform parent)
-    {
-        var viewObject = new GameObject("Drone Camera View", typeof(RectTransform), typeof(RawImage));
-        viewObject.transform.SetParent(parent, false);
-        var rect = viewObject.GetComponent<RectTransform>();
+        var gridObject = new GameObject("Drone Camera Grid", typeof(RectTransform), typeof(GridLayoutGroup));
+        gridObject.transform.SetParent(parent, false);
+        var rect = gridObject.GetComponent<RectTransform>();
         rect.anchorMin = new Vector2(1f, 1f);
         rect.anchorMax = new Vector2(1f, 1f);
         rect.pivot = new Vector2(1f, 1f);
         rect.sizeDelta = new Vector2(480f, 270f);
         rect.anchoredPosition = new Vector2(-18f, -18f);
-        var image = viewObject.GetComponent<RawImage>();
-        image.color = Color.white;
-        image.enabled = false;
-        return image;
+        var grid = gridObject.GetComponent<GridLayoutGroup>();
+        grid.spacing = new Vector2(4f, 4f);
+        grid.childAlignment = TextAnchor.UpperLeft;
+        grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+        grid.constraintCount = 1;
+        return rect;
     }
 
     private static Button CreateButton(Transform parent, string label, Vector2 anchoredPosition)
@@ -214,47 +143,28 @@ public sealed class DroneDemoUiBuilder
 
 public sealed class DroneDemoUiBuildConfig
 {
-    public int SensorRadius;
-    public float CommunicationRadius;
-    public int DroneCount;
-    public float DroneSpeed;
     public string PlannerLabel;
     public string MapViewLabel;
     public Action<Text> PlannerClicked;
-    public Action<int> SensorRadiusChanged;
-    public Action<float> CommunicationRadiusChanged;
-    public Action<int> DroneCountChanged;
-    public Action<float> DroneSpeedChanged;
     public Action MapViewClicked;
     public Action DroneViewClicked;
-    public Action CameraViewClicked;
     public Action ResetClicked;
 }
 
 public readonly struct DroneDemoUiBuildResult
 {
-    public DroneDemoUiBuildResult(Text statusText, Text plannerButtonText, Slider sensorSlider, Slider communicationSlider, Slider droneCountSlider, Slider droneSpeedSlider, Text mapViewButtonText, Text droneViewButtonText, Text cameraViewButtonText, RawImage droneCameraView)
+    public DroneDemoUiBuildResult(Text statusText, Text plannerButtonText, Text mapViewButtonText, Text droneViewButtonText, RectTransform droneCameraGrid)
     {
         StatusText = statusText;
         PlannerButtonText = plannerButtonText;
-        SensorSlider = sensorSlider;
-        CommunicationSlider = communicationSlider;
-        DroneCountSlider = droneCountSlider;
-        DroneSpeedSlider = droneSpeedSlider;
         MapViewButtonText = mapViewButtonText;
         DroneViewButtonText = droneViewButtonText;
-        CameraViewButtonText = cameraViewButtonText;
-        DroneCameraView = droneCameraView;
+        DroneCameraGrid = droneCameraGrid;
     }
 
     public Text StatusText { get; }
     public Text PlannerButtonText { get; }
-    public Slider SensorSlider { get; }
-    public Slider CommunicationSlider { get; }
-    public Slider DroneCountSlider { get; }
-    public Slider DroneSpeedSlider { get; }
     public Text MapViewButtonText { get; }
     public Text DroneViewButtonText { get; }
-    public Text CameraViewButtonText { get; }
-    public RawImage DroneCameraView { get; }
+    public RectTransform DroneCameraGrid { get; }
 }
