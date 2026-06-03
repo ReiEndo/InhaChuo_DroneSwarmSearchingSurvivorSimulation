@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections;
 
 public class ForestSpawner : MonoBehaviour
 {
@@ -20,8 +21,9 @@ public class ForestSpawner : MonoBehaviour
     [Header("Random Scale")]
     public Vector2 scaleRange = new Vector2(0.8f, 1.2f);
 
-    void Start()
+    IEnumerator Start()
     {
+        yield return null;
         SpawnTrees();
     }
 
@@ -45,7 +47,7 @@ public class ForestSpawner : MonoBehaviour
 
             Vector3 worldPos = new Vector3(
                 randomX + terrainPos.x,
-                y + terrainPos.y -0.3f,
+                y + terrainPos.y -0.5f,
                 randomZ + terrainPos.z
             );
 
