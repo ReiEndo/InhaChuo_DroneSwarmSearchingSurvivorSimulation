@@ -60,6 +60,25 @@ public static class DroneNative
         ThetaStar = 1
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DroneFrontierScoringSettings
+    {
+        public float travel_cost_weight;
+        public float information_gain_weight;
+        public int information_gain_radius;
+        public float recent_goal_penalty;
+        public float same_goal_penalty;
+        public float nearby_drone_penalty_radius;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct DroneFrontierCandidate
+    {
+        public DroneVec3i cell;
+        public float score;
+        public float raw_distance_squared;
+    }
+
     public static int ToNativeCellState(DroneCellState state)
     {
         return state switch
@@ -128,6 +147,57 @@ public static class DroneNative
         );
     }
 
+    public static int DroneRankFrontierCandidates(
+        int width,
+        int height,
+        int depth,
+        DroneVec3i start,
+        DroneVec3i[] knownCells,
+        int[] knownStates,
+        int knownCount,
+        DroneVec3i[] recentGoalCells,
+        int recentGoalCount,
+        DroneVec3i[] occupiedGoalCells,
+        int occupiedGoalCount,
+        DroneFrontierScoringSettings settings,
+        DroneFrontierCandidate[] outCandidates,
+        int outCapacity
+    )
+    {
+        ValidateFrontierRankingInput(
+            width,
+            height,
+            depth,
+            knownCells,
+            knownStates,
+            knownCount,
+            recentGoalCells,
+            recentGoalCount,
+            occupiedGoalCells,
+            occupiedGoalCount,
+            settings,
+            outCandidates,
+            outCapacity
+        );
+
+        return DroneRankFrontierCandidatesNative(
+            width,
+            height,
+            depth,
+            start,
+            knownCells,
+            knownStates,
+            knownCount,
+            recentGoalCells,
+            recentGoalCount,
+            occupiedGoalCells,
+            occupiedGoalCount,
+            settings,
+            outCandidates,
+            outCapacity
+        );
+    }
+
     private static void ValidatePlannerInput(
         int plannerType,
         int width,
@@ -174,6 +244,52 @@ public static class DroneNative
         if (!IsFinite(timeHorizonSeconds) || timeHorizonSeconds <= 0f) throw new ArgumentOutOfRangeException(nameof(timeHorizonSeconds), timeHorizonSeconds, "Time horizon must be finite and positive.");
     }
 
+    private static void ValidateFrontierRankingInput(
+        int width,
+        int height,
+        int depth,
+        DroneVec3i[] knownCells,
+        int[] knownStates,
+        int knownCount,
+        DroneVec3i[] recentGoalCells,
+        int recentGoalCount,
+        DroneVec3i[] occupiedGoalCells,
+        int occupiedGoalCount,
+        DroneFrontierScoringSettings settings,
+        DroneFrontierCandidate[] outCandidates,
+        int outCapacity
+    )
+    {
+        if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width), width, "Width must be positive.");
+        if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height), height, "Height must be positive.");
+        if (depth <= 0) throw new ArgumentOutOfRangeException(nameof(depth), depth, "Depth must be positive.");
+        if (knownCount < 0) throw new ArgumentOutOfRangeException(nameof(knownCount), knownCount, "Known count cannot be negative.");
+        if (recentGoalCount < 0) throw new ArgumentOutOfRangeException(nameof(recentGoalCount), recentGoalCount, "Recent goal count cannot be negative.");
+        if (occupiedGoalCount < 0) throw new ArgumentOutOfRangeException(nameof(occupiedGoalCount), occupiedGoalCount, "Occupied goal count cannot be negative.");
+        if (knownCount > 0 && knownCells == null) throw new ArgumentNullException(nameof(knownCells));
+        if (knownCount > 0 && knownStates == null) throw new ArgumentNullException(nameof(knownStates));
+        if (recentGoalCount > 0 && recentGoalCells == null) throw new ArgumentNullException(nameof(recentGoalCells));
+        if (occupiedGoalCount > 0 && occupiedGoalCells == null) throw new ArgumentNullException(nameof(occupiedGoalCells));
+        if (knownCells != null && knownCount > knownCells.Length) throw new ArgumentException("Known count exceeds known cell array length.", nameof(knownCount));
+        if (knownStates != null && knownCount > knownStates.Length) throw new ArgumentException("Known count exceeds known state array length.", nameof(knownCount));
+        if (recentGoalCells != null && recentGoalCount > recentGoalCells.Length) throw new ArgumentException("Recent goal count exceeds recent goal array length.", nameof(recentGoalCount));
+        if (occupiedGoalCells != null && occupiedGoalCount > occupiedGoalCells.Length) throw new ArgumentException("Occupied goal count exceeds occupied goal array length.", nameof(occupiedGoalCount));
+        if (outCapacity < 0) throw new ArgumentOutOfRangeException(nameof(outCapacity), outCapacity, "Output capacity cannot be negative.");
+        if (outCapacity > 0 && outCandidates == null) throw new ArgumentNullException(nameof(outCandidates));
+        if (outCandidates != null && outCapacity > outCandidates.Length) throw new ArgumentException("Output capacity exceeds output candidate array length.", nameof(outCapacity));
+        ValidateFrontierSettings(settings);
+    }
+
+    private static void ValidateFrontierSettings(DroneFrontierScoringSettings settings)
+    {
+        if (!IsFinite(settings.travel_cost_weight) || settings.travel_cost_weight < 0f) throw new ArgumentOutOfRangeException(nameof(settings.travel_cost_weight), settings.travel_cost_weight, "Travel cost weight must be finite and non-negative.");
+        if (!IsFinite(settings.information_gain_weight) || settings.information_gain_weight < 0f) throw new ArgumentOutOfRangeException(nameof(settings.information_gain_weight), settings.information_gain_weight, "Information gain weight must be finite and non-negative.");
+        if (settings.information_gain_radius < 0) throw new ArgumentOutOfRangeException(nameof(settings.information_gain_radius), settings.information_gain_radius, "Information gain radius cannot be negative.");
+        if (!IsFinite(settings.recent_goal_penalty) || settings.recent_goal_penalty < 0f) throw new ArgumentOutOfRangeException(nameof(settings.recent_goal_penalty), settings.recent_goal_penalty, "Recent goal penalty must be finite and non-negative.");
+        if (!IsFinite(settings.same_goal_penalty) || settings.same_goal_penalty < 0f) throw new ArgumentOutOfRangeException(nameof(settings.same_goal_penalty), settings.same_goal_penalty, "Same goal penalty must be finite and non-negative.");
+        if (!IsFinite(settings.nearby_drone_penalty_radius) || settings.nearby_drone_penalty_radius < 0f) throw new ArgumentOutOfRangeException(nameof(settings.nearby_drone_penalty_radius), settings.nearby_drone_penalty_radius, "Nearby drone penalty radius must be finite and non-negative.");
+    }
+
     private static bool IsFinite(float value)
     {
         return !float.IsNaN(value) && !float.IsInfinity(value);
@@ -204,5 +320,23 @@ public static class DroneNative
         [In] DroneNeighborState[] neighbors,
         int neighborCount,
         out DroneVec3f outVelocity
+    );
+
+    [DllImport(LibName, EntryPoint = "DroneRankFrontierCandidates", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int DroneRankFrontierCandidatesNative(
+        int width,
+        int height,
+        int depth,
+        DroneVec3i start,
+        [In] DroneVec3i[] knownCells,
+        [In] int[] knownStates,
+        int knownCount,
+        [In] DroneVec3i[] recentGoalCells,
+        int recentGoalCount,
+        [In] DroneVec3i[] occupiedGoalCells,
+        int occupiedGoalCount,
+        DroneFrontierScoringSettings settings,
+        [Out] DroneFrontierCandidate[] outCandidates,
+        int outCapacity
     );
 }

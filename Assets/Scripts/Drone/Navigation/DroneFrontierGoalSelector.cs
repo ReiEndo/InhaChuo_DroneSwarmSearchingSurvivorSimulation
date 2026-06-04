@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -16,6 +17,9 @@ public sealed class DroneFrontierGoalSelector
     private readonly List<FrontierCandidate> m_FrontierCandidates = new();
     private readonly Dictionary<int, float> m_RecentGoalTimes = new();
     private readonly List<int> m_ExpiredRecentGoalKeys = new();
+    private readonly List<DroneNative.DroneVec3i> m_RecentGoalCells = new();
+    private readonly List<DroneNative.DroneVec3i> m_OccupiedGoalCells = new();
+    private DroneNative.DroneFrontierCandidate[] m_NativeCandidates = Array.Empty<DroneNative.DroneFrontierCandidate>();
 
     public struct Settings
     {
@@ -44,28 +48,74 @@ public sealed class DroneFrontierGoalSelector
     )
     {
         m_FrontierCandidates.Clear();
-
-        foreach (var observation in agentState.LocalMap.KnownObservations)
+        if (agentState == null || agentState.LocalMap == null || world == null)
         {
-            if (DroneGridMath.CellsEqual(observation.Cell, startCell)
-                || !IsTraversable(observation.State)
-                || !HasUnknownNeighbor(agentState.LocalMap, world, observation.Cell))
-            {
-                continue;
-            }
-
-            float travelCost = DroneGridMath.SquaredDistance(startCell, observation.Cell);
-            float informationGain = EstimateInformationGain(agentState.LocalMap, world, observation.Cell, settings.InformationGainRadius);
-            float recentPenalty = GetRecentGoalPenalty(agentState.LocalMap, observation.Cell, settings, Time.time);
-            float swarmPenalty = EstimateSwarmOverlapPenalty(agentState, observation.Cell, settings);
-            float score = settings.TravelCostWeight * travelCost
-                - settings.InformationGainWeight * informationGain
-                + recentPenalty
-                + swarmPenalty;
-            m_FrontierCandidates.Add(new FrontierCandidate(observation.Cell, score, travelCost));
+            return;
         }
 
-        m_FrontierCandidates.Sort(static (left, right) => left.Score.CompareTo(right.Score));
+        PruneRecentGoals(settings.RecentGoalPenaltySeconds, Time.time);
+        BuildRecentGoalCells(agentState.LocalMap, settings);
+        BuildOccupiedGoalCells(agentState, settings);
+
+        var snapshot = agentState.LocalMap.CreatePlannerInputSnapshot();
+        var nativeSettings = new DroneNative.DroneFrontierScoringSettings
+        {
+            travel_cost_weight = Mathf.Max(0f, settings.TravelCostWeight),
+            information_gain_weight = Mathf.Max(0f, settings.InformationGainWeight),
+            information_gain_radius = Mathf.Max(0, settings.InformationGainRadius),
+            recent_goal_penalty = Mathf.Max(0f, settings.RecentGoalPenaltyDistance),
+            same_goal_penalty = Mathf.Max(0f, settings.SameGoalPenalty),
+            nearby_drone_penalty_radius = Mathf.Max(0f, settings.NearbyDronePenaltyRadius),
+        };
+
+        DroneNative.DroneVec3i[] recentGoalCells = ToOptionalArray(m_RecentGoalCells);
+        DroneNative.DroneVec3i[] occupiedGoalCells = ToOptionalArray(m_OccupiedGoalCells);
+
+        int required = DroneNative.DroneRankFrontierCandidates(
+            agentState.LocalMap.Width,
+            agentState.LocalMap.Height,
+            agentState.LocalMap.Depth,
+            startCell,
+            snapshot.KnownCells,
+            snapshot.KnownStates,
+            snapshot.KnownCount,
+            recentGoalCells,
+            m_RecentGoalCells.Count,
+            occupiedGoalCells,
+            m_OccupiedGoalCells.Count,
+            nativeSettings,
+            null,
+            0
+        );
+
+        if (required <= 0)
+        {
+            return;
+        }
+
+        EnsureNativeCandidateCapacity(required);
+        int count = DroneNative.DroneRankFrontierCandidates(
+            agentState.LocalMap.Width,
+            agentState.LocalMap.Height,
+            agentState.LocalMap.Depth,
+            startCell,
+            snapshot.KnownCells,
+            snapshot.KnownStates,
+            snapshot.KnownCount,
+            recentGoalCells,
+            m_RecentGoalCells.Count,
+            occupiedGoalCells,
+            m_OccupiedGoalCells.Count,
+            nativeSettings,
+            m_NativeCandidates,
+            m_NativeCandidates.Length
+        );
+
+        for (int i = 0; i < count; i++)
+        {
+            var candidate = m_NativeCandidates[i];
+            m_FrontierCandidates.Add(new FrontierCandidate(candidate.cell, candidate.raw_distance_squared));
+        }
     }
 
     public bool TryGetCandidate(int index, out DroneNative.DroneVec3i cell, out float rawDistanceSquared)
@@ -104,33 +154,32 @@ public sealed class DroneFrontierGoalSelector
         return false;
     }
 
-    private float EstimateInformationGain(DroneLocalMap localMap, DroneDemoGridWorld world, DroneNative.DroneVec3i center, int radius)
+    private void BuildRecentGoalCells(DroneLocalMap localMap, Settings settings)
     {
-        int gain = 0;
-        for (int dz = -radius; dz <= radius; dz++)
-        for (int dy = -radius; dy <= radius; dy++)
-        for (int dx = -radius; dx <= radius; dx++)
+        m_RecentGoalCells.Clear();
+        if (settings.RecentGoalPenaltySeconds <= 0f || settings.RecentGoalPenaltyDistance <= 0f)
         {
-            var cell = new DroneNative.DroneVec3i(center.x + dx, center.y + dy, center.z + dz);
-            if (world.IsInBounds(cell) && localMap.GetState(cell) == DroneCellState.Unknown)
+            return;
+        }
+
+        foreach (int index in m_RecentGoalTimes.Keys)
+        {
+            if (localMap.TryCellFromGridIndex(index, out var cell))
             {
-                gain++;
+                m_RecentGoalCells.Add(cell);
             }
         }
-
-        return gain;
     }
 
-    private float EstimateSwarmOverlapPenalty(DroneSwarmAgentState agentState, DroneNative.DroneVec3i candidate, Settings settings)
+    private void BuildOccupiedGoalCells(DroneSwarmAgentState agentState, Settings settings)
     {
+        m_OccupiedGoalCells.Clear();
         if (settings.NearbyDronePenaltyRadius <= 0f || settings.SameGoalPenalty <= 0f)
         {
-            return 0f;
+            return;
         }
 
-        float penalty = 0f;
-        float radiusSquared = settings.NearbyDronePenaltyRadius * settings.NearbyDronePenaltyRadius;
-        var agents = Object.FindObjectsByType<DroneSwarmAgentState>(FindObjectsSortMode.None);
+        var agents = UnityEngine.Object.FindObjectsByType<DroneSwarmAgentState>(FindObjectsInactive.Exclude);
         foreach (var other in agents)
         {
             if (other == agentState || !other.TryGetComponent<DroneFrontierExplorer>(out var explorer) || !explorer.HasGoal)
@@ -138,29 +187,28 @@ public sealed class DroneFrontierGoalSelector
                 continue;
             }
 
-            if (DroneGridMath.SquaredDistance(candidate, explorer.CurrentGoal) <= radiusSquared)
-            {
-                penalty += settings.SameGoalPenalty;
-            }
+            m_OccupiedGoalCells.Add(explorer.CurrentGoal);
         }
-
-        return penalty;
     }
 
-    private float GetRecentGoalPenalty(DroneLocalMap localMap, DroneNative.DroneVec3i cell, Settings settings, float time)
+    private static DroneNative.DroneVec3i[] ToOptionalArray(List<DroneNative.DroneVec3i> cells)
     {
-        if (settings.RecentGoalPenaltySeconds <= 0f || settings.RecentGoalPenaltyDistance <= 0f || localMap == null)
+        return cells.Count > 0 ? cells.ToArray() : null;
+    }
+
+    private void EnsureNativeCandidateCapacity(int required)
+    {
+        if (m_NativeCandidates.Length >= required)
         {
-            return 0f;
+            return;
         }
 
-        PruneRecentGoals(settings.RecentGoalPenaltySeconds, time);
-        return m_RecentGoalTimes.ContainsKey(localMap.GridIndex(cell)) ? settings.RecentGoalPenaltyDistance : 0f;
+        m_NativeCandidates = new DroneNative.DroneFrontierCandidate[required];
     }
 
     private void PruneRecentGoals(float recentGoalPenaltySeconds, float time)
     {
-        if (m_RecentGoalTimes.Count == 0)
+        if (recentGoalPenaltySeconds <= 0f || m_RecentGoalTimes.Count == 0)
         {
             return;
         }
@@ -184,13 +232,11 @@ public sealed class DroneFrontierGoalSelector
     private readonly struct FrontierCandidate
     {
         public readonly DroneNative.DroneVec3i Cell;
-        public readonly float Score;
         public readonly float RawDistanceSquared;
 
-        public FrontierCandidate(DroneNative.DroneVec3i cell, float score, float rawDistanceSquared)
+        public FrontierCandidate(DroneNative.DroneVec3i cell, float rawDistanceSquared)
         {
             Cell = cell;
-            Score = score;
             RawDistanceSquared = rawDistanceSquared;
         }
     }

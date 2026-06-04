@@ -41,7 +41,7 @@ public sealed class DroneSwarmMapTileRenderer
                 tile.transform.SetParent(parent, false);
                 tile.transform.position = world.GridToWorld(
                     new DroneNative.DroneVec3i(x, 0, z),
-                    world.GridOrigin.y + cellHeightOffset + 0.012f
+                    cellHeightOffset + 0.012f
                 );
                 tile.transform.localScale = new Vector3(
                     world.CellSize * cellFillScale,

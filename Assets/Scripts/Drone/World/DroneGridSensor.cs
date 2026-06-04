@@ -6,6 +6,9 @@ public sealed class DroneGridSensor : MonoBehaviour
 {
     [SerializeField] private DroneDemoGridWorld world;
     [SerializeField] private int sensorRadius = 2;
+    [SerializeField] private bool useCameraFootprint = true;
+    [SerializeField] private Camera sensingCamera;
+    [SerializeField] private float cameraSampleHeight = 0.35f;
     [SerializeField] private float senseIntervalSeconds = 0.25f;
     [SerializeField] private bool senseOnStart = true;
 
@@ -22,11 +25,22 @@ public sealed class DroneGridSensor : MonoBehaviour
         set => sensorRadius = Mathf.Max(0, value);
     }
 
+    public Camera SensingCamera
+    {
+        get => sensingCamera;
+        set => sensingCamera = value;
+    }
+
     public void Configure(DroneDemoGridWorld newWorld, int newSensorRadius)
     {
         world = newWorld;
         SensorRadius = newSensorRadius;
         ConfigureAgentMap();
+    }
+
+    public void ConfigureCamera(Camera newSensingCamera)
+    {
+        sensingCamera = newSensingCamera;
     }
 
     private void Awake()
@@ -51,6 +65,7 @@ public sealed class DroneGridSensor : MonoBehaviour
     private void OnValidate()
     {
         sensorRadius = Mathf.Max(0, sensorRadius);
+        cameraSampleHeight = Mathf.Max(0f, cameraSampleHeight);
         senseIntervalSeconds = Mathf.Max(0.02f, senseIntervalSeconds);
     }
 
@@ -76,6 +91,19 @@ public sealed class DroneGridSensor : MonoBehaviour
 
         bool changed = false;
         float timestamp = Mathf.Max(Time.time, 0.0001f);
+
+        if (useCameraFootprint && TrySenseCameraFootprint(timestamp, ref changed))
+        {
+            FinishSense(changed);
+            return;
+        }
+
+        SenseRadius(timestamp, ref changed);
+        FinishSense(changed);
+    }
+
+    private void SenseRadius(float timestamp, ref bool changed)
+    {
         var center = world.WorldToGrid(transform.position);
         int radiusSquared = sensorRadius * sensorRadius;
 
@@ -100,19 +128,95 @@ public sealed class DroneGridSensor : MonoBehaviour
                     }
 
                     DroneCellState state = world.SenseCell(cell);
-                    if (state == DroneCellState.Target)
+                    ObserveCell(cell, state, timestamp, ref changed);
+                }
+            }
+        }
+    }
+
+    private bool TrySenseCameraFootprint(float timestamp, ref bool changed)
+    {
+        Camera camera = ResolveSensingCamera();
+        if (camera == null)
+        {
+            return false;
+        }
+
+        for (int z = 0; z < world.Depth; z++)
+        {
+            for (int y = 0; y < world.Height; y++)
+            {
+                for (int x = 0; x < world.Width; x++)
+                {
+                    var cell = new DroneNative.DroneVec3i(x, y, z);
+                    if (!CameraTouchesCell(camera, cell))
                     {
-                        changed |= agentState.ObserveTarget(cell, timestamp);
-                        TargetSensed?.Invoke(this, cell);
+                        continue;
                     }
-                    else
-                    {
-                        changed |= agentState.ObserveCell(cell, state, timestamp);
-                    }
+
+                    DroneCellState state = world.SenseCell(cell);
+                    ObserveCell(cell, state, timestamp, ref changed);
                 }
             }
         }
 
+        return true;
+    }
+
+    private Camera ResolveSensingCamera()
+    {
+        if (sensingCamera != null)
+        {
+            return sensingCamera;
+        }
+
+        sensingCamera = GetComponentInChildren<Camera>();
+        return sensingCamera;
+    }
+
+    private bool CameraTouchesCell(Camera camera, DroneNative.DroneVec3i cell)
+    {
+        float halfCell = world.CellSize * 0.5f;
+        Vector3 center = world.GridToWorld(cell, cell.y * world.CellSize + cameraSampleHeight);
+
+        return CameraContainsPoint(camera, center)
+            || CameraContainsPoint(camera, center + new Vector3(-halfCell, 0f, -halfCell))
+            || CameraContainsPoint(camera, center + new Vector3(-halfCell, 0f, halfCell))
+            || CameraContainsPoint(camera, center + new Vector3(halfCell, 0f, -halfCell))
+            || CameraContainsPoint(camera, center + new Vector3(halfCell, 0f, halfCell));
+    }
+
+    private static bool CameraContainsPoint(Camera camera, Vector3 worldPoint)
+    {
+        Vector3 viewportPoint = camera.WorldToViewportPoint(worldPoint);
+        return viewportPoint.z >= camera.nearClipPlane
+            && viewportPoint.z <= camera.farClipPlane
+            && viewportPoint.x >= 0f
+            && viewportPoint.x <= 1f
+            && viewportPoint.y >= 0f
+            && viewportPoint.y <= 1f;
+    }
+
+    private void ObserveCell(
+        DroneNative.DroneVec3i cell,
+        DroneCellState state,
+        float timestamp,
+        ref bool changed
+    )
+    {
+        if (state == DroneCellState.Target)
+        {
+            changed |= agentState.ObserveTarget(cell, timestamp);
+            TargetSensed?.Invoke(this, cell);
+        }
+        else
+        {
+            changed |= agentState.ObserveCell(cell, state, timestamp);
+        }
+    }
+
+    private void FinishSense(bool changed)
+    {
         nextSenseAt = Time.time + senseIntervalSeconds;
 
         if (changed)
