@@ -1887,6 +1887,7 @@ MonoBehaviour:
   moveSpeed: 3
   obstacleCheckDistance: 0.5
   minTargetDistance: 10
+  terrainMargin: 10
   obstacleMask:
     serializedVersion: 2
     m_Bits: 128
@@ -1894,6 +1895,8 @@ MonoBehaviour:
   staminaDecreasePerSecond: 5
   staminaRecoveryPerSecond: 7
   restartThreshold: 50
+  stuckCheckInterval: 2
+  stuckDistanceThreshold: 1
 --- !u!1 &1764214107
 GameObject:
   m_ObjectHideFlags: 0

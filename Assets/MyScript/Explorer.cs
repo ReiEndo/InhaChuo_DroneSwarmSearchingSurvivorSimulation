@@ -9,47 +9,49 @@ public class Explorer : MonoBehaviour
     public Terrain terrain;
 
     [Header("探索")]
-    public float scanRadius = 20f;
-    public float moveSpeed = 3f;
-    public float obstacleCheckDistance = 0.5f;
-    public float minTargetDistance = 10f;
-    private float avoidTimer = 0f;//回避と目標地点に移動、2つの状態に分離
+    public float scanRadius = 20f;  //目標地点最大範囲
+    public float minTargetDistance = 10f;   //目標地点最小範囲
+    public float moveSpeed = 3f;    //移動速度
+    public float obstacleCheckDistance = 1f;    //障害物検知距離
+    private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
+    public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
 
-    private Vector3 targetPosition;
-    private bool hasTarget = false;
+    private Vector3 targetPosition;     //目標地点
+    private bool hasTarget = false;     //目標地点が定まっているか
 
-    private float verticalVelocity;//重力用
+    private float verticalVelocity;     //重力用
     
-    public LayerMask obstacleMask;//地面の障害物判定を除外
-    private float avoidDirection;//回避回転の左右ランダム化
-    private bool isAvoiding = false;//回避開始時だけ回転するようフラッグ
-    private Quaternion avoidRotation;//瞬時に回転しないよう
+    public LayerMask obstacleMask;      //地面の障害物判定を除外
+    private float avoidDirection;       //回避回転の左右ランダム化
+    private bool isAvoiding = false;    //回避開始時だけ回転するようフラッグ
+    private Quaternion avoidRotation;   //瞬時に回転しないよう
     
     [Header("体力")]
     [Range(0, 100)]
-    public float stamina = 100f;
-    public float staminaDecreasePerSecond = 5f;
-    public float staminaRecoveryPerSecond = 7f;
-    public float restartThreshold = 50f;
-    private bool isResting = false;
+    public float stamina = 100f; //体力フル
+    public float staminaDecreasePerSecond = 5f;     //体力減少速度
+    public float staminaRecoveryPerSecond = 7f;     //体力回復速度
+    public float restartThreshold = 50f;  //休憩→移動への体力必要値
+    private bool isResting = false;  //true:移動 false:休憩
 
-    //public int mapSizeX = 500;
-    //public int mapSizeZ = 500;
+    [Header("スタック判定")]
+    public float stuckCheckInterval = 3f;   //スタック確認時間間隔
+    public float stuckDistanceThreshold = 1f;   //スタック判定最低距離
+    private Vector3 lastCheckPosition;     //最新現在地点
+    private float stuckTimer = 0f;      //スタックタイマー
 
-    //private bool[,] discovered;
-
-    void Start()
+    void Start() //起動時
     {
-        //discovered = new bool[mapSizeX, mapSizeZ];
+        lastCheckPosition = transform.position;
 
         animator = GetComponent<Animator>();
 
         controller = GetComponent<CharacterController>();
     }
 
-    void Update()
+    void Update() //フレームごとの更新
     {
-        //ScanAround();
+        CheckStuck();
         if (isResting)
         {
             RecoverStamina();
@@ -64,88 +66,56 @@ public class Explorer : MonoBehaviour
         MoveToTarget();
     }
 
-    /*void ScanAround()
+    void CheckStuck() //スタック時目的地リセット
     {
-        Vector3 pos = transform.position;
-        int centerX = Mathf.RoundToInt(pos.x);
-        int centerZ = Mathf.RoundToInt(pos.z);
-        for (int x = centerX - (int)scanRadius; x <= centerX + (int)scanRadius; x++)
+        stuckTimer += Time.deltaTime;
+
+        if (stuckTimer < stuckCheckInterval) return;
+
+        float moved = Vector3.Distance(transform.position, lastCheckPosition);
+
+        if (moved < stuckDistanceThreshold)
         {
-            for (int z = centerZ - (int)scanRadius; z <= centerZ + (int)scanRadius; z++)
-            {
-                if (x < 0 || z < 0 || x >= mapSizeX || z >= mapSizeZ) continue;
-                float dist = Vector2.Distance(
-                    new Vector2(centerX, centerZ),
-                    new Vector2(x, z)
-                );
-                if (dist <= scanRadius)
-                {
-                    discovered[x, z] = true;
-                }
-            }
+            hasTarget = false;
+            isAvoiding = false;
+            avoidTimer = 0f;
         }
-    }*/
 
-    bool IsObstacleAhead()
-    {
-        Vector3 origin =
-            transform.position + Vector3.up * 1.5f;
-
-        Vector3 bodyOrigin =
-            transform.position + Vector3.up * 0.8f;
-
-        Vector3 forward = transform.forward;
-
-        Vector3 leftDir =
-            Quaternion.Euler(0, -15, 0) * forward;
-
-        Vector3 rightDir =
-            Quaternion.Euler(0, 15, 0) * forward;
-
-        Debug.DrawRay(origin, forward * obstacleCheckDistance, Color.red);
-
-        Debug.DrawRay(origin, leftDir * obstacleCheckDistance, Color.yellow);
-
-        Debug.DrawRay(origin, rightDir * obstacleCheckDistance, Color.cyan);
-
-        Debug.DrawRay(bodyOrigin, forward * obstacleCheckDistance, Color.green);
-
-        if (Physics.Raycast(origin, forward,obstacleCheckDistance, obstacleMask))
-            return true;
-
-        if (Physics.Raycast(origin, leftDir, obstacleCheckDistance, obstacleMask))
-            return true;
-
-        if (Physics.Raycast(origin, rightDir, obstacleCheckDistance, obstacleMask))
-            return true;
-
-        if (Physics.Raycast(bodyOrigin, forward, obstacleCheckDistance, obstacleMask))
-            return true;
-
-        return false;
+        lastCheckPosition = transform.position;
+        stuckTimer = 0f;
     }
 
-    void FindUnknownTarget()
+    bool IsObstacleAhead() //障害物検知
     {
-    /*for(int i=0; i<10; i++)
-    {*/
-        //int x = Random.Range(0, mapSizeX);
-        //int z = Random.Range(0, mapSizeZ);
-        Vector2 randomCircle = Random.insideUnitCircle * scanRadius;
+        Vector3 origin = transform.position + Vector3.up * 0.8f;
 
-        Vector3 target = 
-            transform.position + 
-            new Vector3(randomCircle.x, 0 , randomCircle.y);
+        float radius = controller.radius*0.9f;
+
+        Debug.DrawRay(
+            origin,
+            transform.forward * obstacleCheckDistance,
+            Color.red
+        );
+
+        return Physics.SphereCast(
+            origin,
+            radius,
+            transform.forward,
+            out _,
+            obstacleCheckDistance,
+            obstacleMask
+        );
+    }
+
+    void FindUnknownTarget() //目標地点決定
+    {
+        float angle = Random.Range(-60f, 60f);
+        Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
+        float distance = Random.Range(minTargetDistance, scanRadius);
+
+        Vector3 target = transform.position + dir * distance;
 
         target.y = Terrain.activeTerrain.SampleHeight(target);
-
-        float distance =
-            Vector3.Distance(
-                transform.position,
-                target
-            );
-
-        if (distance < minTargetDistance) return;
 
         if(IsInsideTerrain(target) && IsValidPoint(target) && !HasSteepSlopeOnPath(transform.position,target)) 
         {
@@ -154,56 +124,36 @@ public class Explorer : MonoBehaviour
 
             return;
         }
-
-        /*if (discovered[x, z] == false)
-        {
-            Vector3 worldPos = new Vector3(x, 0, z);
-
-            float y = terrain.SampleHeight(worldPos);
-
-            y += terrain.transform.position.y;
-
-            targetPosition = new Vector3(x, y, z);
-
-            hasTarget = true;
-
-            return;
-        }*/
-    /*}*/
     }
 
-    bool IsInsideTerrain(Vector3 point)
+    bool IsInsideTerrain(Vector3 point) //terrain範囲外への移動防止
     {
         Vector3 terrainPos = terrain.transform.position;
 
         Vector3 terrainSize = terrain.terrainData.size;
 
         bool insideX =
-            point.x >= terrainPos.x &&
-            point.x <= terrainPos.x + terrainSize.x;
+            point.x >= terrainPos.x + terrainMargin &&
+            point.x <= terrainPos.x + terrainSize.x - terrainMargin;
 
         bool insideZ =
-            point.z >= terrainPos.z &&
-            point.z <= terrainPos.z + terrainSize.z;
+            point.z >= terrainPos.z + terrainMargin &&
+            point.z <= terrainPos.z + terrainSize.z - terrainMargin;
 
         return insideX && insideZ;
     }
 
-    bool IsValidPoint(Vector3 point)
+    bool IsValidPoint(Vector3 point) //目標地点が障害物と重なること防止
     {
         float checkRadius = 2.0f;
 
-        bool blocked =
-            Physics.CheckSphere(
-                point,
-                checkRadius,
-                obstacleMask
-            );
+        bool blocked = Physics.CheckSphere(point, checkRadius, obstacleMask);
 
         return !blocked;
     }
 
-    bool HasSteepSlopeOnPath(Vector3 start, Vector3 end)
+    //改善の必要あり
+    bool HasSteepSlopeOnPath(Vector3 start, Vector3 end) //現在地点→目標地点　急な斜面防止
     {
         int samples = 10;
 
@@ -251,6 +201,7 @@ public class Explorer : MonoBehaviour
         }
     }
 
+    //改善の必要あり
     void MoveToTarget()
     {
         //debug log
@@ -259,16 +210,13 @@ public class Explorer : MonoBehaviour
         Debug.Log("Distance:" +
         Vector3.Distance(transform.position, targetPosition));
 
-
         stamina -= staminaDecreasePerSecond * Time.deltaTime;
         stamina = Mathf.Clamp(stamina, 0f, 100f);
 
         if (stamina <= 0f)
         {
             stamina = 0f;
-
             isResting = true;
-
             hasTarget = false;
 
             animator.SetFloat("Speed", 0f);
@@ -282,27 +230,24 @@ public class Explorer : MonoBehaviour
 
             avoidTimer -= Time.deltaTime;
 
-            transform.rotation =
+            transform.rotation = 
                 Quaternion.Slerp(
-                    transform.rotation,
-                    avoidRotation,
+                    transform.rotation, 
+                    avoidRotation, 
                     3f * Time.deltaTime
                 );
 
-            Vector3 avoidMove =
-                transform.forward * moveSpeed;
+            Vector3 avoidMove = transform.forward * moveSpeed;
 
             avoidMove.y = verticalVelocity;
 
-            Vector3 nextPos =
-                transform.position +
-                transform.forward * moveSpeed * Time.deltaTime;
+            Vector3 nextPos = transform.position + transform.forward * moveSpeed * Time.deltaTime;
 
             if (!IsInsideTerrain(nextPos))
             {
-                avoidTimer = 0f;
-                isAvoiding = false;
                 hasTarget = false;
+                isAvoiding = false;
+                avoidTimer = 0f;
                 return;
             }
 
@@ -328,15 +273,13 @@ public class Explorer : MonoBehaviour
         if (!hasTarget) return;
         Vector3 currentPos = transform.position;
 
-        Vector3 targetDir =
-            targetPosition - transform.position;
+        Vector3 targetDir = targetPosition - transform.position;
 
         targetDir.y = 0;
 
         if (targetDir != Vector3.zero)
         {
-            Quaternion targetRot =
-                Quaternion.LookRotation(targetDir);
+            Quaternion targetRot = Quaternion.LookRotation(targetDir);
 
             transform.rotation =
                 Quaternion.Slerp(
@@ -346,34 +289,15 @@ public class Explorer : MonoBehaviour
                 );
         }
 
-        if (controller.isGrounded)
-        {
-            verticalVelocity = -1f;
-        }
-        else
-        {
-            verticalVelocity += Physics.gravity.y * Time.deltaTime;
-        }
+        if (controller.isGrounded) verticalVelocity = -1f;
+        else verticalVelocity += Physics.gravity.y * Time.deltaTime;
 
-        Vector3 move =
-            transform.forward * moveSpeed;
+        Vector3 move = transform.forward * moveSpeed;
 
         move.y = verticalVelocity;
 
         controller.Move(move * Time.deltaTime);
 
-       /* Vector3 dir = targetPosition - transform.position;
-
-        dir.y = 0;
-
-        if (dir != Vector3.zero)
-        {
-            transform.rotation = Quaternion.Slerp(
-                transform.rotation,
-                Quaternion.LookRotation(dir),
-                5f * Time.deltaTime
-            );
-        }*/
         animator.SetFloat("Speed", moveSpeed);
         animator.SetFloat("MotionSpeed", 1f);
         float dist = Vector3.Distance(
@@ -381,27 +305,6 @@ public class Explorer : MonoBehaviour
             targetPosition
         );
 
-        if (dist < 4f)
-        {
-            hasTarget = false;
-        }
-
-        /*
-        Debug.DrawLine(
-            transform.position,
-            targetPosition,
-            Color.green
-        );
-        Debug.Log(controller.velocity);
-        */
-    }
-
-    public void OnFootstep()
-    {
-    }
-
-    public float GetStamina()
-    {
-        return stamina;
+        if (dist < 4f) hasTarget = false;
     }
 }
