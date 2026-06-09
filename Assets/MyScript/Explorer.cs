@@ -2,34 +2,41 @@ using UnityEngine;
 
 public class Explorer : MonoBehaviour
 {
+    private Animator animator;
+    private CharacterController controller;//移動方法にCharacterController.Moveを採用
+
     [Header("Terrain")]
     public Terrain terrain;
-
-    private Animator animator;
 
     [Header("探索")]
     public float scanRadius = 20f;
     public float moveSpeed = 3f;
+    public float obstacleCheckDistance = 0.5f;
+    public float minTargetDistance = 10f;
+    private float avoidTimer = 0f;//回避と目標地点に移動、2つの状態に分離
 
+    private Vector3 targetPosition;
+    private bool hasTarget = false;
+
+    private float verticalVelocity;//重力用
+    
+    public LayerMask obstacleMask;//地面の障害物判定を除外
+    private float avoidDirection;//回避回転の左右ランダム化
+    private bool isAvoiding = false;//回避開始時だけ回転するようフラッグ
+    private Quaternion avoidRotation;//瞬時に回転しないよう
+    
+    [Header("体力")]
+    [Range(0, 100)]
+    public float stamina = 100f;
+    public float staminaDecreasePerSecond = 5f;
+    public float staminaRecoveryPerSecond = 7f;
+    public float restartThreshold = 50f;
+    private bool isResting = false;
 
     //public int mapSizeX = 500;
     //public int mapSizeZ = 500;
 
     //private bool[,] discovered;
-
-    public float obstacleCheckDistance = 2f;
-
-    private Vector3 targetPosition;
-
-    private bool hasTarget = false;
-    private CharacterController controller;//移動方法にCharacterController.Moveを採用
-    private float verticalVelocity;//重力用
-    public LayerMask obstacleMask;//地面の障害物判定を除外
-    private float avoidTimer = 0f;//回避と目標地点に移動、2つの状態に分離
-    //private float avoidDirection;//回避回転の左右ランダム化
-    private bool isAvoiding = false;//回避開始時だけ回転するようフラッグ
-    private Quaternion avoidRotation;//瞬時に回転しないよう
-
 
     void Start()
     {
@@ -43,8 +50,13 @@ public class Explorer : MonoBehaviour
     void Update()
     {
         //ScanAround();
+        if (isResting)
+        {
+            RecoverStamina();
+            return;
+        }
 
-        if(!hasTarget)
+        while(!hasTarget)
         {
             FindUnknownTarget();
         }
@@ -79,19 +91,24 @@ public class Explorer : MonoBehaviour
         Vector3 origin =
             transform.position + Vector3.up * 1.5f;
 
+        Vector3 bodyOrigin =
+            transform.position + Vector3.up * 0.8f;
+
         Vector3 forward = transform.forward;
 
         Vector3 leftDir =
-            Quaternion.Euler(0, -30, 0) * forward;
+            Quaternion.Euler(0, -15, 0) * forward;
 
         Vector3 rightDir =
-            Quaternion.Euler(0, 30, 0) * forward;
+            Quaternion.Euler(0, 15, 0) * forward;
 
         Debug.DrawRay(origin, forward * obstacleCheckDistance, Color.red);
 
         Debug.DrawRay(origin, leftDir * obstacleCheckDistance, Color.yellow);
 
         Debug.DrawRay(origin, rightDir * obstacleCheckDistance, Color.cyan);
+
+        Debug.DrawRay(bodyOrigin, forward * obstacleCheckDistance, Color.green);
 
         if (Physics.Raycast(origin, forward,obstacleCheckDistance, obstacleMask))
             return true;
@@ -100,6 +117,9 @@ public class Explorer : MonoBehaviour
             return true;
 
         if (Physics.Raycast(origin, rightDir, obstacleCheckDistance, obstacleMask))
+            return true;
+
+        if (Physics.Raycast(bodyOrigin, forward, obstacleCheckDistance, obstacleMask))
             return true;
 
         return false;
@@ -119,7 +139,15 @@ public class Explorer : MonoBehaviour
 
         target.y = Terrain.activeTerrain.SampleHeight(target);
 
-        if(IsInsideTerrain(target) && IsValidPoint(target)) 
+        float distance =
+            Vector3.Distance(
+                transform.position,
+                target
+            );
+
+        if (distance < minTargetDistance) return;
+
+        if(IsInsideTerrain(target) && IsValidPoint(target) && !HasSteepSlopeOnPath(transform.position,target)) 
         {
             hasTarget = true;
             targetPosition = target;
@@ -163,7 +191,7 @@ public class Explorer : MonoBehaviour
 
     bool IsValidPoint(Vector3 point)
     {
-        float checkRadius = 1.2f;
+        float checkRadius = 2.0f;
 
         bool blocked =
             Physics.CheckSphere(
@@ -175,10 +203,83 @@ public class Explorer : MonoBehaviour
         return !blocked;
     }
 
+    bool HasSteepSlopeOnPath(Vector3 start, Vector3 end)
+    {
+        int samples = 10;
+
+        for(int i = 0; i <= samples; i++)
+        {
+            float t = i / (float)samples;
+
+            Vector3 p =
+                Vector3.Lerp(start, end, t);
+
+            Vector3 normal =
+                terrain.terrainData.GetInterpolatedNormal(
+                    (p.x - terrain.transform.position.x)
+                    / terrain.terrainData.size.x,
+
+                    (p.z - terrain.transform.position.z)
+                    / terrain.terrainData.size.z
+                );
+
+            float slope =
+                Vector3.Angle(
+                    normal,
+                    Vector3.up
+                );
+
+            if(slope > 40f)
+                return true;
+        }
+
+        return false;
+    }
+
+    void RecoverStamina()
+    {
+        stamina += staminaRecoveryPerSecond * Time.deltaTime;
+
+        stamina = Mathf.Clamp(stamina, 0f, 100f);
+
+        animator.SetFloat("Speed", 0f);
+        animator.SetFloat("MotionSpeed", 0f);
+
+        if (stamina >= restartThreshold)
+        {
+            isResting = false;
+        }
+    }
+
     void MoveToTarget()
     {
+        //debug log
+        Debug.Log("Avoid:" + isAvoiding);
+        Debug.Log("HasObstacle:" + IsObstacleAhead());
+        Debug.Log("Distance:" +
+        Vector3.Distance(transform.position, targetPosition));
+
+
+        stamina -= staminaDecreasePerSecond * Time.deltaTime;
+        stamina = Mathf.Clamp(stamina, 0f, 100f);
+
+        if (stamina <= 0f)
+        {
+            stamina = 0f;
+
+            isResting = true;
+
+            hasTarget = false;
+
+            animator.SetFloat("Speed", 0f);
+            animator.SetFloat("MotionSpeed", 0f);
+
+            return;
+        }
+
         if (avoidTimer > 0)
         {
+
             avoidTimer -= Time.deltaTime;
 
             transform.rotation =
@@ -193,6 +294,18 @@ public class Explorer : MonoBehaviour
 
             avoidMove.y = verticalVelocity;
 
+            Vector3 nextPos =
+                transform.position +
+                transform.forward * moveSpeed * Time.deltaTime;
+
+            if (!IsInsideTerrain(nextPos))
+            {
+                avoidTimer = 0f;
+                isAvoiding = false;
+                hasTarget = false;
+                return;
+            }
+
             controller.Move(avoidMove * Time.deltaTime);
 
             if (avoidTimer <= 0)
@@ -205,12 +318,10 @@ public class Explorer : MonoBehaviour
 
         if (IsObstacleAhead() && !isAvoiding)
         {
-            /*回避ランダム化avoidDirection =
-                Random.value < 0.5f ? -1f : 1f;*/
+            avoidDirection = Random.value < 0.5f ? -1f : 1f;
+            avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + 45f + avoidDirection * 60f, 0);
 
-            avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + 45f /*+ avoidDirection * 60f*/, 0);
-
-            avoidTimer = 1.0f;
+            avoidTimer = 4.0f;
 
             isAvoiding = true;
         }
@@ -251,7 +362,7 @@ public class Explorer : MonoBehaviour
 
         controller.Move(move * Time.deltaTime);
 
-        Vector3 dir = targetPosition - transform.position;
+       /* Vector3 dir = targetPosition - transform.position;
 
         dir.y = 0;
 
@@ -262,7 +373,7 @@ public class Explorer : MonoBehaviour
                 Quaternion.LookRotation(dir),
                 5f * Time.deltaTime
             );
-        }
+        }*/
         animator.SetFloat("Speed", moveSpeed);
         animator.SetFloat("MotionSpeed", 1f);
         float dist = Vector3.Distance(
@@ -270,9 +381,27 @@ public class Explorer : MonoBehaviour
             targetPosition
         );
 
-        if (dist < 1f)
+        if (dist < 4f)
         {
             hasTarget = false;
         }
+
+        /*
+        Debug.DrawLine(
+            transform.position,
+            targetPosition,
+            Color.green
+        );
+        Debug.Log(controller.velocity);
+        */
+    }
+
+    public void OnFootstep()
+    {
+    }
+
+    public float GetStamina()
+    {
+        return stamina;
     }
 }
