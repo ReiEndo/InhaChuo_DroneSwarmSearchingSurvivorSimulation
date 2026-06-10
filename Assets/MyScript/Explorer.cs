@@ -5,28 +5,38 @@ public class Explorer : MonoBehaviour
     [Header("Terrain")]
     public Terrain terrain;
 
-    private Animator animator;
-
     [Header("探索")]
-    public float scanRadius = 20f;
+    public float scanRadius = 10f;
     public float moveSpeed = 3f;
+    public float arriveDistance = 1.5f;
 
+    [Header("体力")]
+    [Range(0, 100)]
+    public float stamina = 100f;
+    public float staminaDecreasePerSecond = 5f;
+    public float staminaRecoveryPerSecond = 10f;
+    public float restartThreshold = 70f;
+    private bool isResting = false;
 
     //public int mapSizeX = 500;
     //public int mapSizeZ = 500;
 
     //private bool[,] discovered;
-
+    [Header("障害物")]
     public float obstacleCheckDistance = 2f;
+    public LayerMask obstacleMask;//地面の障害物判定を除外
 
+    [Header("ランダム")]
+    public int randomSeed = 12345;
     private Vector3 targetPosition;
 
+    [Header("アニメーション")]
+    private Animator animator;
     private bool hasTarget = false;
     private CharacterController controller;//移動方法にCharacterController.Moveを採用
     private float verticalVelocity;//重力用
-    public LayerMask obstacleMask;//地面の障害物判定を除外
     private float avoidTimer = 0f;//回避と目標地点に移動、2つの状態に分離
-    //private float avoidDirection;//回避回転の左右ランダム化
+    private float avoidDirection;//回避回転の左右ランダム化
     private bool isAvoiding = false;//回避開始時だけ回転するようフラッグ
     private Quaternion avoidRotation;//瞬時に回転しないよう
 
@@ -34,6 +44,8 @@ public class Explorer : MonoBehaviour
     void Start()
     {
         //discovered = new bool[mapSizeX, mapSizeZ];
+
+        Random.InitState(randomSeed);
 
         animator = GetComponent<Animator>();
 
@@ -43,8 +55,13 @@ public class Explorer : MonoBehaviour
     void Update()
     {
         //ScanAround();
+        if (isResting)
+        {
+            RecoverStamina();
+            return;
+        }
 
-        if(!hasTarget)
+        while(!hasTarget)
         {
             FindUnknownTarget();
         }
@@ -96,10 +113,10 @@ public class Explorer : MonoBehaviour
         if (Physics.Raycast(origin, forward,obstacleCheckDistance, obstacleMask))
             return true;
 
-        if (Physics.Raycast(origin, leftDir, obstacleCheckDistance, obstacleMask))
+        if (Physics.Raycast(origin, leftDir, obstacleCheckDistance))
             return true;
 
-        if (Physics.Raycast(origin, rightDir, obstacleCheckDistance, obstacleMask))
+        if (Physics.Raycast(origin, rightDir, obstacleCheckDistance))
             return true;
 
         return false;
@@ -107,8 +124,6 @@ public class Explorer : MonoBehaviour
 
     void FindUnknownTarget()
     {
-    /*for(int i=0; i<10; i++)
-    {*/
         //int x = Random.Range(0, mapSizeX);
         //int z = Random.Range(0, mapSizeZ);
         Vector2 randomCircle = Random.insideUnitCircle * scanRadius;
@@ -141,7 +156,6 @@ public class Explorer : MonoBehaviour
 
             return;
         }*/
-    /*}*/
     }
 
     bool IsInsideTerrain(Vector3 point)
@@ -175,8 +189,40 @@ public class Explorer : MonoBehaviour
         return !blocked;
     }
 
+    void RecoverStamina()
+    {
+        stamina += staminaRecoveryPerSecond * Time.deltaTime;
+
+        stamina = Mathf.Clamp(stamina, 0f, 100f);
+
+        animator.SetFloat("Speed", 0f);
+        animator.SetFloat("MotionSpeed", 0f);
+
+        if (stamina >= restartThreshold)
+        {
+            isResting = false;
+        }
+    }
+
     void MoveToTarget()
     {
+        stamina -= staminaDecreasePerSecond * Time.deltaTime;
+        stamina = Mathf.Clamp(stamina, 0f, 100f);
+
+        if (stamina <= 0f)
+        {
+            stamina = 0f;
+
+            isResting = true;
+
+            hasTarget = false;
+
+            animator.SetFloat("Speed", 0f);
+            animator.SetFloat("MotionSpeed", 0f);
+
+            return;
+        }
+
         if (avoidTimer > 0)
         {
             avoidTimer -= Time.deltaTime;
@@ -205,10 +251,10 @@ public class Explorer : MonoBehaviour
 
         if (IsObstacleAhead() && !isAvoiding)
         {
-            /*回避ランダム化avoidDirection =
-                Random.value < 0.5f ? -1f : 1f;*/
+            avoidDirection =
+                Random.value < 0.5f ? -1f : 1f;
 
-            avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + 45f /*+ avoidDirection * 60f*/, 0);
+            avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + avoidDirection * 60f, 0);
 
             avoidTimer = 1.0f;
 
@@ -251,7 +297,7 @@ public class Explorer : MonoBehaviour
 
         controller.Move(move * Time.deltaTime);
 
-        Vector3 dir = targetPosition - transform.position;
+        /*Vector3 dir = targetPosition - transform.position;
 
         dir.y = 0;
 
@@ -262,7 +308,7 @@ public class Explorer : MonoBehaviour
                 Quaternion.LookRotation(dir),
                 5f * Time.deltaTime
             );
-        }
+        }*/
         animator.SetFloat("Speed", moveSpeed);
         animator.SetFloat("MotionSpeed", 1f);
         float dist = Vector3.Distance(
@@ -270,9 +316,14 @@ public class Explorer : MonoBehaviour
             targetPosition
         );
 
-        if (dist < 1f)
+        if (dist < arriveDistance)
         {
             hasTarget = false;
         }
+    }
+
+    public float GetStamina()
+    {
+        return stamina;
     }
 }
