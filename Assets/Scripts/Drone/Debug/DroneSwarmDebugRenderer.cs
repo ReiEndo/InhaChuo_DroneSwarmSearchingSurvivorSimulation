@@ -31,6 +31,15 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
     [SerializeField] private Color frontierColor = new(0.25f, 1f, 0.25f, 0.75f);
     [SerializeField] private Color dronePathColor = new(1f, 1f, 0.2f, 0.9f);
 
+    private readonly List<DroneSwarmAgentState> explorerStates = new();
+    private DroneCellState[] mapStateCache = System.Array.Empty<DroneCellState>();
+    private int cachedWidth;
+    private int cachedDepth;
+    private bool mapStateCacheDirty = true;
+    private bool mapStateCacheValid;
+    private bool runtimeTilesDirty = true;
+    private bool lastBuildRuntimeTiles;
+    private bool lastDrawUnknownCells;
     private DroneSwarmMapTileRenderer tileRenderer;
 
     public MapViewMode CurrentMapViewMode => mapViewMode;
@@ -60,12 +69,20 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
         world = newWorld;
         commandState = newCommandState;
         explorers = newExplorers ?? new List<DroneFrontierExplorer>();
+        CacheExplorerStates();
+        MarkMapStateCacheDirty();
         RebuildRuntimeTiles();
     }
 
     public void SetMapViewMode(MapViewMode newMapViewMode)
     {
+        if (mapViewMode == newMapViewMode)
+        {
+            return;
+        }
+
         mapViewMode = newMapViewMode;
+        MarkMapStateCacheDirty();
     }
 
     public void CycleMapViewMode()
@@ -76,6 +93,7 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
             MapViewMode.Command => MapViewMode.SelectedDrone,
             _ => MapViewMode.Merged,
         };
+        MarkMapStateCacheDirty();
     }
 
     public void SelectNextDrone()
@@ -88,6 +106,7 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
 
         selectedDroneIndex = (selectedDroneIndex + 1) % explorers.Count;
         mapViewMode = MapViewMode.SelectedDrone;
+        MarkMapStateCacheDirty();
     }
 
     private void Awake()
@@ -97,12 +116,23 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
 
     private void OnDestroy()
     {
+        UnsubscribeMapEvents();
         tileRenderer?.Clear();
     }
 
     private void LateUpdate()
     {
-        tileRenderer?.Update(world, buildRuntimeTiles, drawUnknownCells, GetBestKnownState, GetCellColor);
+        bool cacheRebuilt = EnsureMapStateCache();
+        bool tileSettingsChanged = lastBuildRuntimeTiles != buildRuntimeTiles
+            || lastDrawUnknownCells != drawUnknownCells;
+
+        if (cacheRebuilt || runtimeTilesDirty || tileSettingsChanged)
+        {
+            tileRenderer?.Update(world, buildRuntimeTiles, drawUnknownCells, GetBestKnownState, GetCellColor);
+            runtimeTilesDirty = false;
+            lastBuildRuntimeTiles = buildRuntimeTiles;
+            lastDrawUnknownCells = drawUnknownCells;
+        }
     }
 
     private void OnDrawGizmos()
@@ -111,6 +141,8 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
         {
             return;
         }
+
+        EnsureMapStateCache();
 
         if (drawCells)
         {
@@ -139,9 +171,24 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
             drawUnknownCells,
             GetBestKnownState,
             GetCellColor);
+        runtimeTilesDirty = false;
+        lastBuildRuntimeTiles = buildRuntimeTiles;
+        lastDrawUnknownCells = drawUnknownCells;
     }
 
     private DroneCellState GetBestKnownState(DroneNative.DroneVec3i cell)
+    {
+        if (mapStateCacheValid
+            && cell.x >= 0 && cell.x < cachedWidth
+            && cell.z >= 0 && cell.z < cachedDepth)
+        {
+            return mapStateCache[cell.z * cachedWidth + cell.x];
+        }
+
+        return ResolveBestKnownState(cell);
+    }
+
+    private DroneCellState ResolveBestKnownState(DroneNative.DroneVec3i cell)
     {
         if (mapViewMode == MapViewMode.Command)
         {
@@ -164,11 +211,10 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
             return state;
         }
 
-        foreach (var explorer in explorers)
+        for (int i = 0; i < explorerStates.Count; i++)
         {
-            if (explorer == null
-                || !explorer.TryGetComponent<DroneSwarmAgentState>(out var agentState)
-                || agentState.LocalMap == null)
+            var agentState = explorerStates[i];
+            if (agentState == null || agentState.LocalMap == null)
             {
                 continue;
             }
@@ -191,15 +237,124 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
         }
 
         int index = Mathf.Clamp(selectedDroneIndex, 0, explorers.Count - 1);
-        var explorer = explorers[index];
-        if (explorer == null
-            || !explorer.TryGetComponent<DroneSwarmAgentState>(out var agentState)
-            || agentState.LocalMap == null)
+        if (index >= explorerStates.Count)
         {
             return DroneCellState.Unknown;
         }
 
-        return agentState.LocalMap.GetState(cell);
+        var agentState = explorerStates[index];
+        return agentState != null && agentState.LocalMap != null
+            ? agentState.LocalMap.GetState(cell)
+            : DroneCellState.Unknown;
+    }
+
+    private void CacheExplorerStates()
+    {
+        UnsubscribeMapEvents();
+        explorerStates.Clear();
+        if (explorers != null)
+        {
+            foreach (var explorer in explorers)
+            {
+                explorerStates.Add(
+                    explorer != null && explorer.TryGetComponent<DroneSwarmAgentState>(out var agentState)
+                        ? agentState
+                        : null);
+            }
+        }
+
+        SubscribeMapEvents();
+    }
+
+    private bool EnsureMapStateCache()
+    {
+        if (world == null)
+        {
+            mapStateCacheValid = false;
+            return false;
+        }
+
+        int requiredCount = world.Width * world.Depth;
+        if (mapStateCache.Length != requiredCount || cachedWidth != world.Width || cachedDepth != world.Depth)
+        {
+            mapStateCache = new DroneCellState[requiredCount];
+            cachedWidth = world.Width;
+            cachedDepth = world.Depth;
+            mapStateCacheDirty = true;
+        }
+
+        if (!mapStateCacheDirty && mapStateCacheValid)
+        {
+            return false;
+        }
+
+        for (int z = 0; z < world.Depth; z++)
+        {
+            for (int x = 0; x < world.Width; x++)
+            {
+                var cell = new DroneNative.DroneVec3i(x, 0, z);
+                mapStateCache[z * world.Width + x] = ResolveBestKnownState(cell);
+            }
+        }
+
+        mapStateCacheDirty = false;
+        mapStateCacheValid = true;
+        runtimeTilesDirty = true;
+        tileRenderer?.MarkDirty();
+        return true;
+    }
+
+    private void MarkMapStateCacheDirty()
+    {
+        mapStateCacheDirty = true;
+        mapStateCacheValid = false;
+        runtimeTilesDirty = true;
+        tileRenderer?.MarkDirty();
+    }
+
+    private void SubscribeMapEvents()
+    {
+        if (commandState != null)
+        {
+            commandState.LocalMapChanged += HandleMapStateChanged;
+            commandState.LocalMapReset += HandleMapStateChanged;
+        }
+
+        foreach (var agentState in explorerStates)
+        {
+            if (agentState == null)
+            {
+                continue;
+            }
+
+            agentState.LocalMapChanged += HandleMapStateChanged;
+            agentState.LocalMapReset += HandleMapStateChanged;
+        }
+    }
+
+    private void UnsubscribeMapEvents()
+    {
+        if (commandState != null)
+        {
+            commandState.LocalMapChanged -= HandleMapStateChanged;
+            commandState.LocalMapReset -= HandleMapStateChanged;
+        }
+
+        foreach (var agentState in explorerStates)
+        {
+            if (agentState == null)
+            {
+                continue;
+            }
+
+            agentState.LocalMapChanged -= HandleMapStateChanged;
+            agentState.LocalMapReset -= HandleMapStateChanged;
+        }
+    }
+
+    private void HandleMapStateChanged(DroneSwarmAgentState changedAgent)
+    {
+        MarkMapStateCacheDirty();
     }
 
     private Color GetCellColor(DroneCellState state)

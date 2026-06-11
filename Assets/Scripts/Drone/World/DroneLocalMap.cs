@@ -236,14 +236,14 @@ public sealed class DroneLocalMap
 
         if (knownCount == count)
         {
-            return new DronePlannerInputSnapshot(knownCells, knownStates, knownCount);
+            return DronePlannerInputSnapshot.Wrap(knownCells, knownStates, knownCount);
         }
 
         var compactCells = new DroneNative.DroneVec3i[knownCount];
         var compactStates = new int[knownCount];
         Array.Copy(knownCells, compactCells, knownCount);
         Array.Copy(knownStates, compactStates, knownCount);
-        return new DronePlannerInputSnapshot(compactCells, compactStates, knownCount);
+        return DronePlannerInputSnapshot.Wrap(compactCells, compactStates, knownCount);
     }
 
     public int CountKnownCells(bool includeBlocked = true)

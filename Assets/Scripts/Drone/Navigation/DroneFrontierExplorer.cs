@@ -25,6 +25,8 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private DronePathFollower pathFollower;
     private DroneDemoGridWorld world;
     private DroneNative.DroneVec3i[] path = Array.Empty<DroneNative.DroneVec3i>();
+    private DroneNative.DroneVec3i[] knownCells = Array.Empty<DroneNative.DroneVec3i>();
+    private int[] knownStates = Array.Empty<int>();
     private int pathCount;
     private int usablePathCount;
     private int pathIndex;
@@ -176,7 +178,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         var startCell = world.WorldToGrid(transform.position);
         agentState.ObserveCell(startCell, DroneCellState.Free, Mathf.Max(Time.time, 0.0001f));
 
-        var snapshot = agentState.LocalMap.CreatePlannerInputSnapshot();
+        var snapshot = CreateReusablePlannerInputSnapshot();
         if (path == null || path.Length != maxPathLength)
         {
             path = new DroneNative.DroneVec3i[maxPathLength];
@@ -195,6 +197,19 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         usablePathCount = Mathf.Min(pathCount, path.Length);
         pathIndex = usablePathCount > 1 ? 1 : 0;
         pathFollower?.SetPath(path, usablePathCount);
+    }
+
+    private DronePlannerInputSnapshot CreateReusablePlannerInputSnapshot()
+    {
+        int requiredCapacity = agentState.LocalMap.CellCount;
+        if (knownCells.Length != requiredCapacity)
+        {
+            knownCells = new DroneNative.DroneVec3i[requiredCapacity];
+            knownStates = new int[requiredCapacity];
+        }
+
+        int knownCount = agentState.LocalMap.BuildKnownCellArrays(knownCells, knownStates);
+        return DronePlannerInputSnapshot.Wrap(knownCells, knownStates, knownCount);
     }
 
     private bool TryPlanReachableGoal(

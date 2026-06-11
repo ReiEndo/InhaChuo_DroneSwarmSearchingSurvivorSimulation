@@ -17,4 +17,18 @@ public struct DronePlannerInputSnapshot
         KnownStates = knownStates != null ? (int[])knownStates.Clone() : null;
         KnownCount = knownCount;
     }
+
+    public static DronePlannerInputSnapshot Wrap(
+        DroneNative.DroneVec3i[] knownCells,
+        int[] knownStates,
+        int knownCount
+    )
+    {
+        return new DronePlannerInputSnapshot
+        {
+            KnownCells = knownCells,
+            KnownStates = knownStates,
+            KnownCount = knownCount,
+        };
+    }
 }

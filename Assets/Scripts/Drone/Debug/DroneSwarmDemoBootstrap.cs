@@ -8,7 +8,7 @@ using UnityEngine.UI;
 
 public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 {
-    private const int c_ObstacleLayer = 0;
+    private const int c_ObstacleLayer = 7;
     private const int c_TargetLayer = 4;
     private const int c_NonSensedLayer = 2;
     private const float c_DroneCameraFieldOfView = 75f;

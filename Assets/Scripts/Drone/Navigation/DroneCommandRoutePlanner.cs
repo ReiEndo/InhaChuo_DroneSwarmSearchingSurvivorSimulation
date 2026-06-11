@@ -19,6 +19,8 @@ public sealed class DroneCommandRoutePlanner : MonoBehaviour
 
     private DroneSwarmAgentState agentState;
     private DroneNative.DroneVec3i[] route = Array.Empty<DroneNative.DroneVec3i>();
+    private DroneNative.DroneVec3i[] knownCells = Array.Empty<DroneNative.DroneVec3i>();
+    private int[] knownStates = Array.Empty<int>();
     private int routeCount;
     private float nextReplanAt;
     private bool replanRequested = true;
@@ -144,7 +146,7 @@ public sealed class DroneCommandRoutePlanner : MonoBehaviour
             route = new DroneNative.DroneVec3i[maxPathLength];
         }
 
-        var snapshot = agentState.LocalMap.CreatePlannerInputSnapshot();
+        var snapshot = CreateReusablePlannerInputSnapshot();
         routeCount = DroneNative.DronePlanKnownPath(
             (int)plannerType,
             world.Width,
@@ -163,6 +165,19 @@ public sealed class DroneCommandRoutePlanner : MonoBehaviour
         {
             routeCount = 0;
         }
+    }
+
+    private DronePlannerInputSnapshot CreateReusablePlannerInputSnapshot()
+    {
+        int requiredCapacity = agentState.LocalMap.CellCount;
+        if (knownCells.Length != requiredCapacity)
+        {
+            knownCells = new DroneNative.DroneVec3i[requiredCapacity];
+            knownStates = new int[requiredCapacity];
+        }
+
+        int knownCount = agentState.LocalMap.BuildKnownCellArrays(knownCells, knownStates);
+        return DronePlannerInputSnapshot.Wrap(knownCells, knownStates, knownCount);
     }
 
     private void ConfigureCommandMap()
