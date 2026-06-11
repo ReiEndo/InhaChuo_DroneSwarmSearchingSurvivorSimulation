@@ -21,6 +21,16 @@ public class ForestSpawner : MonoBehaviour
     [Header("Random Scale")]
     public Vector2 scaleRange = new Vector2(0.8f, 1.2f);
 
+    [Header("Drone Sensing")]
+    [Tooltip("Layer used by DroneDemoGridWorld as blocked/obstacle. ProjectSettings currently defines Obstacle as layer 7.")]
+    public int obstacleLayer = 7;
+    [Tooltip("Apply the obstacle layer to every spawned tree child so child colliders are sensed correctly.")]
+    public bool setLayerRecursively = true;
+    [Tooltip("Add one simple trigger collider to tree prefabs that do not already have colliders. Keeps sensing cheap compared with mesh colliders.")]
+    public bool addMissingCollisionProxy = true;
+    public float proxyRadius = 0.35f;
+    public float proxyHeight = 2.5f;
+
     IEnumerator Start()
     {
         yield return null;
@@ -85,6 +95,35 @@ public class ForestSpawner : MonoBehaviour
             // ランダムスケール
             float scale = Random.Range(scaleRange.x, scaleRange.y);
             tree.transform.localScale *= scale;
+
+            PrepareTreeForDroneSensing(tree);
         }
+    }
+
+    void PrepareTreeForDroneSensing(GameObject tree)
+    {
+        if (tree == null)
+            return;
+
+        if (setLayerRecursively)
+            SetLayerRecursively(tree, obstacleLayer);
+        else
+            tree.layer = obstacleLayer;
+
+        if (!addMissingCollisionProxy || tree.GetComponentInChildren<Collider>() != null)
+            return;
+
+        CapsuleCollider proxy = tree.AddComponent<CapsuleCollider>();
+        proxy.isTrigger = true;
+        proxy.radius = Mathf.Max(0.01f, proxyRadius);
+        proxy.height = Mathf.Max(proxy.radius * 2f, proxyHeight);
+        proxy.center = new Vector3(0f, proxy.height * 0.5f, 0f);
+    }
+
+    void SetLayerRecursively(GameObject root, int layer)
+    {
+        root.layer = layer;
+        foreach (Transform child in root.transform)
+            SetLayerRecursively(child.gameObject, layer);
     }
 }
