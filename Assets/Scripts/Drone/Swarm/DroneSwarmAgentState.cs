@@ -3,6 +3,8 @@ using UnityEngine;
 
 public sealed class DroneSwarmAgentState : MonoBehaviour
 {
+    private static readonly System.Collections.Generic.List<DroneSwarmAgentState> s_ActiveAgents = new();
+
     [Header("Identity")]
     [SerializeField] private int droneId;
 
@@ -22,9 +24,24 @@ public sealed class DroneSwarmAgentState : MonoBehaviour
     public event Action<DroneSwarmAgentState> LocalMapReset;
     public event Action<DroneSwarmAgentState> LocalMapChanged;
 
+    public static System.Collections.Generic.IReadOnlyList<DroneSwarmAgentState> ActiveAgents => s_ActiveAgents;
+
     private void Awake()
     {
         EnsureLocalMap();
+    }
+
+    private void OnEnable()
+    {
+        if (!s_ActiveAgents.Contains(this))
+        {
+            s_ActiveAgents.Add(this);
+        }
+    }
+
+    private void OnDisable()
+    {
+        s_ActiveAgents.Remove(this);
     }
 
     private void OnValidate()
