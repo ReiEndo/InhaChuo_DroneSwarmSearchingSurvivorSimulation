@@ -13,9 +13,25 @@ public sealed class DroneDemoUiBuilder
         this.registerSpawned = registerSpawned;
     }
 
+    private void EnsureEventSystemExists()
+    {
+        if (EventSystem.current != null)
+        {
+            return;
+        }
+
+        Spawn("EventSystem")
+            .AddComponent<EventSystem>()
+            .gameObject
+            .AddComponent<InputSystemUIInputModule>();
+    }
+
     public DroneDemoUiBuildResult Build(DroneDemoUiBuildConfig config)
     {
+        /*EventSystemが二つ生成されているため修正
         Spawn("EventSystem").AddComponent<EventSystem>().gameObject.AddComponent<InputSystemUIInputModule>();
+        ↓EventSystemが存在する場合は何もしない。存在しなければ生成。*/
+        EnsureEventSystemExists();
 
         var canvasObject = Spawn("Drone Swarm Demo UI");
         var canvas = canvasObject.AddComponent<Canvas>();

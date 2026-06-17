@@ -45,6 +45,26 @@ public class ForestSpawner : MonoBehaviour
         get { return SpawnTreePositions; }
     }
 
+    public bool IsFarEnoughFromTrees(Vector3 worldPosition, float distance)
+    {
+        Vector2 candidateXZ = new Vector2(
+            worldPosition.x,
+            worldPosition.z
+        );
+
+        float distanceSqrLimit = distance * distance;
+
+        foreach (Vector2 treePos in spawnedTreePositions)
+        {
+            float distanceSqr = (candidateXZ - treePos).sqrMagnitude;
+
+            if (distanceSqr < distanceSqrLimit)
+                return false;
+        }
+
+        return true;
+    }
+
     /*
     ScriptsControl.csにて制御
     IEnumerator Start()

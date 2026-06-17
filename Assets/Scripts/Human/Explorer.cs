@@ -40,6 +40,14 @@ public class Explorer : MonoBehaviour
     private Vector3 lastCheckPosition;     //最新現在地点
     private float stuckTimer = 0f;      //スタックタイマー
 
+    [Header("Random Spawn")]
+    public ForestSpawner forestSpawner;
+    public float initialTreeDistance = 5f;
+    public int initialSpawnMaxAttempts = 1000;
+    public float initialSpawnYOffset = 0.1f;
+    public float initialSpawnCheckRadius = 1.0f;
+    public float initialMaxSlope = 35f;
+
     /*
     Scripts\ScriptControl\ScriptsControl.csにて制御
     void Start() //起動時
@@ -54,6 +62,8 @@ public class Explorer : MonoBehaviour
 
     public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
     {
+        TeleportToRandomInitialPosition();
+
         lastCheckPosition = transform.position;
 
         animator = GetComponent<Animator>();
@@ -319,4 +329,91 @@ public class Explorer : MonoBehaviour
 
         if (dist < 4f) hasTarget = false;
     }
+
+    /*Explorer初期位置テレポート*/
+    public void TeleportToRandomInitialPosition()
+    {
+        if(terrain == null)
+        {
+            Debug.LogError("[Explorer.cs:Set Terrain on Explorers Inspector]");
+            return;
+        }
+        TerrainData terrainData = terrain.terrainData;
+        Vector3 terrainPos = terrain.transform.position;
+
+        CharacterController cc = GetComponent <CharacterController>();
+
+        for (int attempt = 0; attempt < initialSpawnMaxAttempts; attempt++)
+        {
+            float randomX = Random.Range(terrainMargin, terrainData.size.x - terrainMargin);
+            float randomZ = Random.Range(terrainMargin, terrainData.size.z - terrainMargin);
+
+            float worldX = terrainPos.x + randomX;
+            float worldZ = terrainPos.z + randomZ;
+
+            float y = terrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPos.y;
+
+            Vector3 candidatePosition = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
+
+            if (!IsInsideTerrain(candidatePosition)) continue;
+
+            if (!IsValidInitialSpawnPoint(candidatePosition)) continue;
+
+            if (!IsSlopeValidForInitialSpawn(candidatePosition)) continue;
+
+            if(forestSpawner !=  null && !forestSpawner.IsFarEnoughFromTrees(candidatePosition, initialTreeDistance)) continue;
+
+            if (cc != null) cc.enabled = false;
+
+            transform.position = candidatePosition;
+
+            if (cc != null) cc.enabled = true;
+
+            hasTarget = false;
+            isAvoiding = false;
+            avoidTimer = 0f;
+            verticalVelocity = 0f;
+            lastCheckPosition = transform.position;
+
+            Debug.Log("Explorer position set: " + candidatePosition);
+
+            return;
+        }
+        Debug.LogWarning("[Explorer.cs]: cannot set Explorer on terrain safe position");
+    }
+    bool IsValidInitialSpawnPoint(Vector3 point)
+    {
+        Vector3 checkCenter = point + Vector3.up * 1.0f;
+
+        bool blocked = Physics.CheckSphere(
+            checkCenter,
+            initialSpawnCheckRadius,
+            obstacleMask,
+            QueryTriggerInteraction.Collide
+        );
+
+        return !blocked;
+    }
+    bool IsSlopeValidForInitialSpawn(Vector3 point)
+    {
+        Vector3 terrainPos = terrain.transform.position;
+        Vector3 terrainSize = terrain.terrainData.size;
+
+        float normalizedX =
+            (point.x - terrainPos.x) / terrainSize.x;
+
+        float normalizedZ =
+            (point.z - terrainPos.z) / terrainSize.z;
+
+        Vector3 normal =
+            terrain.terrainData.GetInterpolatedNormal(
+                normalizedX,
+                normalizedZ
+            );
+
+        float slope = Vector3.Angle(normal, Vector3.up);
+
+        return slope <= initialMaxSlope;
+    }
+
 }
