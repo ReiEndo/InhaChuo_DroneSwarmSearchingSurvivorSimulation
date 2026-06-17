@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections;
+using System.Collections.Generic;
 
 public class ForestSpawner : MonoBehaviour
 {
@@ -21,15 +22,28 @@ public class ForestSpawner : MonoBehaviour
     [Header("Random Scale")]
     public Vector2 scaleRange = new Vector2(0.8f, 1.2f);
 
+    [Header("Tree Distance Limit")]
+    public float minDistance = 3f;
+    public int maxSpawnAttemptCounts = 20;
+
     [Header("Drone Sensing")]
     [Tooltip("Layer used by DroneDemoGridWorld as blocked/obstacle. ProjectSettings currently defines Obstacle as layer 7.")]
     public int obstacleLayer = 7;
+
     [Tooltip("Apply the obstacle layer to every spawned tree child so child colliders are sensed correctly.")]
     public bool setLayerRecursively = true;
+
     [Tooltip("Add one simple trigger collider to tree prefabs that do not already have colliders. Keeps sensing cheap compared with mesh colliders.")]
     public bool addMissingCollisionProxy = true;
     public float proxyRadius = 0.35f;
     public float proxyHeight = 2.5f;
+
+    private List<Vector2> spawnedTreePositions = new List<Vector2>();
+
+    public IReadOnlyList<Vector2> SpawnTreePositions //外部参照用(forest_spawner.cs外からの中身の変更は不可)
+    {
+        get { return SpawnTreePositions; }
+    }
 
     /*
     ScriptsControl.csにて制御
@@ -45,8 +59,14 @@ public class ForestSpawner : MonoBehaviour
         TerrainData terrainData = terrain.terrainData;
         Vector3 terrainPos = terrain.transform.position;
 
-        for (int i = 0; i < treeCount; i++)
+        int spawnedCount = 0;
+        int attempts = 0;
+        int maxAttempts = treeCount * maxSpawnAttemptCounts;
+
+        while (spawnedCount < treeCount && attempts < maxAttempts)
         {
+            attempts++;
+
             // ランダムXZ座標
             float randomX = Random.Range(0, terrainData.size.x);
             float randomZ = Random.Range(0, terrainData.size.z);
@@ -59,9 +79,9 @@ public class ForestSpawner : MonoBehaviour
             );
 
             Vector3 worldPos = new Vector3(
-                randomX + terrainPos.x,
+                worldX,
                 y + terrainPos.y -0.5f,
-                randomZ + terrainPos.z
+                worldZ
             );
 
             // 高さ制限
@@ -79,6 +99,10 @@ public class ForestSpawner : MonoBehaviour
             // 急斜面回避
             if (slope > maxSlope)
                 continue;
+
+            //木同士の最低距離制限
+            Vector2 candidateXZ = new Vector2(worldX, worldZ);
+            if (!IsFarEnoughFromOtherTrees(candidateXZ, spawnedTreePositions)) continue;
 
             // Prefab選択
             GameObject prefab =
@@ -99,10 +123,28 @@ public class ForestSpawner : MonoBehaviour
             float scale = Random.Range(scaleRange.x, scaleRange.y);
             tree.transform.localScale *= scale;
 
+            spawnedTreePositions.Add(candidateXZ);
+            spawnedCount++;
+
             PrepareTreeForDroneSensing(tree);
+        }
+        if (spawnedCount * 2 < treeCount)
+        {
+            Debug.LogWarning($"[forest_spawner Alert!]The number of Spawned Trees are {spawnedCount} regardless of TreeCount{treeCount}. minDistance in forest_spawner might be too large!");
         }
     }
 
+    bool IsFarEnoughFromOtherTrees(Vector2 candidatePosition, List<Vector2> spawnedTreePositions)
+    {
+        if (minDistance <= 0f) return true;
+        float minDistanceSqr = minDistance * minDistance;
+        foreach (Vector2 existingPosition in spawnedTreePositions)
+        {
+            float distanceSqr = (candidatePosition - existingPosition).sqrMagnitude;
+            if (distanceSqr < minDistanceSqr) return false;
+        }
+        return true;
+    }
     void PrepareTreeForDroneSensing(GameObject tree)
     {
         if (tree == null)
