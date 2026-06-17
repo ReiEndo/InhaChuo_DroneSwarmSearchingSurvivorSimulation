@@ -79,7 +79,10 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         resetQueued = false;
     }
 
+    /*
+    Assets\Scripts\ScriptControl\ScriptsControler.csのvoid Start()にて実行
     private void Start() => ResetDemo();
+    */
 
     private void Update()
     {

@@ -40,7 +40,19 @@ public class Explorer : MonoBehaviour
     private Vector3 lastCheckPosition;     //最新現在地点
     private float stuckTimer = 0f;      //スタックタイマー
 
+    /*
+    Scripts\ScriptControl\ScriptsControl.csにて制御
     void Start() //起動時
+    {
+        lastCheckPosition = transform.position;
+
+        animator = GetComponent<Animator>();
+
+        controller = GetComponent<CharacterController>();
+    }
+    */
+
+    public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
     {
         lastCheckPosition = transform.position;
 

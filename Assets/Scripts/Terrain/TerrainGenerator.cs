@@ -10,12 +10,15 @@ public class TerrainGenerator : MonoBehaviour
     public float scale = 250f;
     public float terrainHeight = 50f;
 
+    /*
+    ScriptControl.csにて制御
     void Start()
     {
         GenerateTerrain();
     }
+    */
 
-    void GenerateTerrain()
+    public void GenerateTerrain()
     {
         TerrainData data = terrain.terrainData;
 

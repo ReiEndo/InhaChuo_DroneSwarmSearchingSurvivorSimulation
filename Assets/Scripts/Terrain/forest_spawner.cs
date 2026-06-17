@@ -31,13 +31,16 @@ public class ForestSpawner : MonoBehaviour
     public float proxyRadius = 0.35f;
     public float proxyHeight = 2.5f;
 
+    /*
+    ScriptsControl.csにて制御
     IEnumerator Start()
     {
         yield return null;
         SpawnTrees();
     }
+    */
 
-    void SpawnTrees()
+    public void SpawnTrees()
     {
         TerrainData terrainData = terrain.terrainData;
         Vector3 terrainPos = terrain.transform.position;
