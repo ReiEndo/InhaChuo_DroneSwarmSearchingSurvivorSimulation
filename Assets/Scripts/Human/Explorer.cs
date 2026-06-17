@@ -12,7 +12,7 @@ public class Explorer : MonoBehaviour
     public float scanRadius = 20f;  //目標地点最大範囲
     public float minTargetDistance = 10f;   //目標地点最小範囲
     public float moveSpeed = 3f;    //移動速度
-    public float obstacleCheckDistance = 1f;    //障害物検知距離
+    public float obstacleCheckDistance = 2.0f;    //障害物検知距離
     private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
     public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
 
@@ -35,10 +35,16 @@ public class Explorer : MonoBehaviour
     private bool isResting = false;  //true:移動 false:休憩
 
     [Header("スタック判定")]
+    private float lastDistanceToTarget;
     public float stuckCheckInterval = 3f;   //スタック確認時間間隔
-    public float stuckDistanceThreshold = 1f;   //スタック判定最低距離
+    public float stuckDistanceThreshold = 3f;   //スタック判定最低距離
     private Vector3 lastCheckPosition;     //最新現在地点
     private float stuckTimer = 0f;      //スタックタイマー
+
+    [Header("Slope Map")]
+    public float maxWalkableSlope = 35f;
+    private bool[,] blockedSlopeMap;
+    private int slopeResolution;
 
     [Header("Random Spawn")]
     public ForestSpawner forestSpawner;
@@ -64,6 +70,8 @@ public class Explorer : MonoBehaviour
     {
         TeleportToRandomInitialPosition();
 
+        BuildSlopeMap();
+
         lastCheckPosition = transform.position;
 
         animator = GetComponent<Animator>();
@@ -83,27 +91,115 @@ public class Explorer : MonoBehaviour
         while(!hasTarget)
         {
             FindUnknownTarget();
+            lastDistanceToTarget = Vector3.Distance(transform.position,targetPosition);
         }
 
         MoveToTarget();
     }
 
-    void CheckStuck() //スタック時目的地リセット
+    void BuildSlopeMap()
     {
+        TerrainData data = terrain.terrainData;
+
+        slopeResolution = data.heightmapResolution;
+
+        blockedSlopeMap =
+            new bool[slopeResolution, slopeResolution];
+
+        for(int x = 0; x < slopeResolution; x++)
+        {
+            for(int z = 0; z < slopeResolution; z++)
+            {
+                float nx =
+                    x / (float)(slopeResolution - 1);
+
+                float nz =
+                    z / (float)(slopeResolution - 1);
+
+                Vector3 normal =
+                    data.GetInterpolatedNormal(
+                        nx,
+                        nz
+                    );
+
+                float slope =
+                    Vector3.Angle(
+                        normal,
+                        Vector3.up
+                    );
+
+                blockedSlopeMap[x, z] =
+                    slope > maxWalkableSlope;
+            }
+        }
+    }
+
+    bool IsBlockedSlope(Vector3 worldPos)
+    {
+        Vector3 terrainPos =
+            terrain.transform.position;
+
+        TerrainData data =
+            terrain.terrainData;
+
+        float nx =
+            (worldPos.x - terrainPos.x)
+            / data.size.x;
+
+        float nz =
+            (worldPos.z - terrainPos.z)
+            / data.size.z;
+
+        int x =
+            Mathf.RoundToInt(
+                nx * (slopeResolution - 1)
+            );
+
+        int z =
+            Mathf.RoundToInt(
+                nz * (slopeResolution - 1)
+            );
+
+        if (x < 0 ||
+            z < 0 ||
+            x >= slopeResolution ||
+            z >= slopeResolution)
+        {
+            return true;
+        }
+
+        return blockedSlopeMap[x, z];
+    }
+
+    void CheckStuck()
+    {
+        if (!hasTarget) return;
+
         stuckTimer += Time.deltaTime;
 
-        if (stuckTimer < stuckCheckInterval) return;
+        if (stuckTimer < stuckCheckInterval)
+            return;
 
-        float moved = Vector3.Distance(transform.position, lastCheckPosition);
+        float currentDistance =
+            Vector3.Distance(
+                transform.position,
+                targetPosition
+            );
 
-        if (moved < stuckDistanceThreshold)
+        float progress =
+            lastDistanceToTarget -
+            currentDistance;
+
+        if (progress < 1.0f)
         {
+            Debug.Log("Stuck");
+
             hasTarget = false;
             isAvoiding = false;
             avoidTimer = 0f;
         }
 
-        lastCheckPosition = transform.position;
+        lastDistanceToTarget = currentDistance;
         stuckTimer = 0f;
     }
 
@@ -139,7 +235,7 @@ public class Explorer : MonoBehaviour
 
         target.y = Terrain.activeTerrain.SampleHeight(target);
 
-        if(IsInsideTerrain(target) && IsValidPoint(target) && !HasSteepSlopeOnPath(transform.position,target)) 
+        if(IsInsideTerrain(target) && IsValidPoint(target) && !CrossBlockedSlope(transform.position, target)) 
         {
             hasTarget = true;
             targetPosition = target;
@@ -174,34 +270,23 @@ public class Explorer : MonoBehaviour
         return !blocked;
     }
 
-    //改善の必要あり
-    bool HasSteepSlopeOnPath(Vector3 start, Vector3 end) //現在地点→目標地点　急な斜面防止
+    bool CrossBlockedSlope(Vector3 start, Vector3 end)
     {
-        int samples = 10;
+        int samples = 30;
 
         for(int i = 0; i <= samples; i++)
         {
-            float t = i / (float)samples;
+            float t =
+                i / (float)samples;
 
             Vector3 p =
-                Vector3.Lerp(start, end, t);
-
-            Vector3 normal =
-                terrain.terrainData.GetInterpolatedNormal(
-                    (p.x - terrain.transform.position.x)
-                    / terrain.terrainData.size.x,
-
-                    (p.z - terrain.transform.position.z)
-                    / terrain.terrainData.size.z
+                Vector3.Lerp(
+                    start,
+                    end,
+                    t
                 );
 
-            float slope =
-                Vector3.Angle(
-                    normal,
-                    Vector3.up
-                );
-
-            if(slope > 40f)
+            if(IsBlockedSlope(p))
                 return true;
         }
 
@@ -231,6 +316,12 @@ public class Explorer : MonoBehaviour
         Debug.Log("HasObstacle:" + IsObstacleAhead());
         Debug.Log("Distance:" +
         Vector3.Distance(transform.position, targetPosition));
+
+        if(CrossBlockedSlope(transform.position, targetPosition))
+        {
+            hasTarget = false;
+            return;
+        }
 
         stamina -= staminaDecreasePerSecond * Time.deltaTime;
         stamina = Mathf.Clamp(stamina, 0f, 100f);
@@ -288,7 +379,7 @@ public class Explorer : MonoBehaviour
             avoidDirection = Random.value < 0.5f ? -1f : 1f;
             avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + 45f + avoidDirection * 60f, 0);
 
-            avoidTimer = 4.0f;
+            avoidTimer = 5.0f;
 
             isAvoiding = true;
         }
