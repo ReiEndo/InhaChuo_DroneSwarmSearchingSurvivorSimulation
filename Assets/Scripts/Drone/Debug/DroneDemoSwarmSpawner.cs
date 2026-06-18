@@ -97,6 +97,7 @@ public sealed class DroneDemoSwarmSpawner
             communicationNodes.Add(node);
 
             var explorer = drone.AddComponent<DroneFrontierExplorer>();
+            explorer.ConfigureHomeCell(start);
             explorer.PlannerType = plannerType;
             explorers.Add(explorer);
 

@@ -1,5 +1,6 @@
 using UnityEngine;
 
+[RequireComponent(typeof(CharacterController))]
 public class Explorer : MonoBehaviour
 {
     private Animator animator;
@@ -12,17 +13,24 @@ public class Explorer : MonoBehaviour
     public float scanRadius = 20f;  //目標地点最大範囲
     public float minTargetDistance = 10f;   //目標地点最小範囲
     public float moveSpeed = 3f;    //移動速度
-    public float obstacleCheckDistance = 2.0f;    //障害物検知距離
+    public float obstacleCheckDistance = 1f;    //障害物検知距離
+    public float obstacleAvoidDuration = 1.0f;  //回避方向を維持する時間
+    public float obstacleAvoidAngle = 55f;      //回避時に左右へ曲がる角度
     private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
     public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
+    [SerializeField] private int maxTargetSearchAttemptsPerFrame = 32;
 
     private Vector3 targetPosition;     //目標地点
     private bool hasTarget = false;     //目標地点が定まっているか
 
+    [Header("ドローン追従")]
+    public float followStopDistance = 3f; //ドローンに近づきすぎない距離
+    public float followBehindDistance = 4f; //ドローンの少し後ろを目標にする距離
+    private Transform followTarget; //最初に発見したドローン
+
     private float verticalVelocity;     //重力用
     
     public LayerMask obstacleMask;      //地面の障害物判定を除外
-    private float avoidDirection;       //回避回転の左右ランダム化
     private bool isAvoiding = false;    //回避開始時だけ回転するようフラッグ
     private Quaternion avoidRotation;   //瞬時に回転しないよう
     
@@ -35,24 +43,10 @@ public class Explorer : MonoBehaviour
     private bool isResting = false;  //true:移動 false:休憩
 
     [Header("スタック判定")]
-    private float lastDistanceToTarget;
     public float stuckCheckInterval = 3f;   //スタック確認時間間隔
-    public float stuckDistanceThreshold = 3f;   //スタック判定最低距離
+    public float stuckDistanceThreshold = 1f;   //スタック判定最低距離
     private Vector3 lastCheckPosition;     //最新現在地点
     private float stuckTimer = 0f;      //スタックタイマー
-
-    [Header("Slope Map")]
-    public float maxWalkableSlope = 35f;
-    private bool[,] blockedSlopeMap;
-    private int slopeResolution;
-
-    [Header("Random Spawn")]
-    public ForestSpawner forestSpawner;
-    public float initialTreeDistance = 5f;
-    public int initialSpawnMaxAttempts = 1000;
-    public float initialSpawnYOffset = 0.1f;
-    public float initialSpawnCheckRadius = 1.0f;
-    public float initialMaxSlope = 35f;
 
     /*
     Scripts\ScriptControl\ScriptsControl.csにて制御
@@ -68,10 +62,6 @@ public class Explorer : MonoBehaviour
 
     public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
     {
-        TeleportToRandomInitialPosition();
-
-        BuildSlopeMap();
-
         lastCheckPosition = transform.position;
 
         animator = GetComponent<Animator>();
@@ -82,173 +72,144 @@ public class Explorer : MonoBehaviour
     void Update() //フレームごとの更新
     {
         CheckStuck();
+        if (followTarget != null)
+        {
+            FollowDrone();
+            return;
+        }
+
         if (isResting)
         {
             RecoverStamina();
             return;
         }
 
-        while(!hasTarget)
+        if (!hasTarget && !TryFindUnknownTarget())
         {
-            FindUnknownTarget();
-            lastDistanceToTarget = Vector3.Distance(transform.position,targetPosition);
+            SetIdleAnimation();
+            return;
         }
 
         MoveToTarget();
     }
 
-    void BuildSlopeMap()
+    public bool IsFollowingDrone => followTarget != null;
+
+    public void StartFollowing(Transform droneTransform)
     {
-        TerrainData data = terrain.terrainData;
-
-        slopeResolution = data.heightmapResolution;
-
-        blockedSlopeMap =
-            new bool[slopeResolution, slopeResolution];
-
-        for(int x = 0; x < slopeResolution; x++)
+        if (followTarget != null || droneTransform == null)
         {
-            for(int z = 0; z < slopeResolution; z++)
-            {
-                float nx =
-                    x / (float)(slopeResolution - 1);
-
-                float nz =
-                    z / (float)(slopeResolution - 1);
-
-                Vector3 normal =
-                    data.GetInterpolatedNormal(
-                        nx,
-                        nz
-                    );
-
-                float slope =
-                    Vector3.Angle(
-                        normal,
-                        Vector3.up
-                    );
-
-                blockedSlopeMap[x, z] =
-                    slope > maxWalkableSlope;
-            }
-        }
-    }
-
-    bool IsBlockedSlope(Vector3 worldPos)
-    {
-        Vector3 terrainPos =
-            terrain.transform.position;
-
-        TerrainData data =
-            terrain.terrainData;
-
-        float nx =
-            (worldPos.x - terrainPos.x)
-            / data.size.x;
-
-        float nz =
-            (worldPos.z - terrainPos.z)
-            / data.size.z;
-
-        int x =
-            Mathf.RoundToInt(
-                nx * (slopeResolution - 1)
-            );
-
-        int z =
-            Mathf.RoundToInt(
-                nz * (slopeResolution - 1)
-            );
-
-        if (x < 0 ||
-            z < 0 ||
-            x >= slopeResolution ||
-            z >= slopeResolution)
-        {
-            return true;
+            return;
         }
 
-        return blockedSlopeMap[x, z];
+        followTarget = droneTransform;
+        isResting = false;
+        hasTarget = true;
+        isAvoiding = false;
+        avoidTimer = 0f;
     }
 
-    void CheckStuck()
+    void CheckStuck() //スタック時目的地リセット
     {
-        if (!hasTarget) return;
-
         stuckTimer += Time.deltaTime;
 
-        if (stuckTimer < stuckCheckInterval)
-            return;
+        if (stuckTimer < stuckCheckInterval) return;
 
-        float currentDistance =
-            Vector3.Distance(
-                transform.position,
-                targetPosition
-            );
+        float moved = Vector3.Distance(transform.position, lastCheckPosition);
 
-        float progress =
-            lastDistanceToTarget -
-            currentDistance;
-
-        if (progress < 1.0f)
+        if (moved < stuckDistanceThreshold)
         {
-            Debug.Log("Stuck");
-
-            hasTarget = false;
+            if (followTarget == null)
+            {
+                hasTarget = false;
+            }
             isAvoiding = false;
             avoidTimer = 0f;
         }
 
-        lastDistanceToTarget = currentDistance;
+        lastCheckPosition = transform.position;
         stuckTimer = 0f;
     }
 
     bool IsObstacleAhead() //障害物検知
     {
-        Vector3 origin = transform.position + Vector3.up * 0.8f;
-
-        float radius = controller.radius*0.9f;
-
-        Debug.DrawRay(
-            origin,
-            transform.forward * obstacleCheckDistance,
-            Color.red
-        );
-
-        return Physics.SphereCast(
-            origin,
-            radius,
-            transform.forward,
-            out _,
-            obstacleCheckDistance,
-            obstacleMask
-        );
+        return GetObstacleClearance(transform.forward, obstacleCheckDistance) < obstacleCheckDistance;
     }
 
-    void FindUnknownTarget() //目標地点決定
+    float GetObstacleClearance(Vector3 direction, float maxDistance)
     {
-        float angle = Random.Range(-60f, 60f);
-        Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
-        float distance = Random.Range(minTargetDistance, scanRadius);
+        Vector3 origin = transform.position + Vector3.up * 0.8f;
+        float radius = controller.radius * 0.9f;
+        direction.y = 0f;
+        direction.Normalize();
 
-        Vector3 target = transform.position + dir * distance;
+        Debug.DrawRay(origin, direction * maxDistance, Color.red);
 
-        target.y = Terrain.activeTerrain.SampleHeight(target);
-
-        if(IsInsideTerrain(target) && IsValidPoint(target) && !CrossBlockedSlope(transform.position, target)) 
+        if (Physics.SphereCast(origin, radius, direction, out RaycastHit hit, maxDistance, obstacleMask))
         {
-            hasTarget = true;
-            targetPosition = target;
-
-            return;
+            return hit.distance;
         }
+
+        return maxDistance;
+    }
+
+    void StartAvoidance()
+    {
+        Vector3 leftDir = Quaternion.Euler(0f, -obstacleAvoidAngle, 0f) * transform.forward;
+        Vector3 rightDir = Quaternion.Euler(0f, obstacleAvoidAngle, 0f) * transform.forward;
+
+        float checkDistance = Mathf.Max(obstacleCheckDistance, controller.radius * 2f);
+        float leftClearance = GetObstacleClearance(leftDir, checkDistance);
+        float rightClearance = GetObstacleClearance(rightDir, checkDistance);
+        Vector3 chosenDir = rightClearance >= leftClearance ? rightDir : leftDir;
+
+        avoidRotation = Quaternion.LookRotation(chosenDir);
+        avoidTimer = obstacleAvoidDuration;
+        isAvoiding = true;
+    }
+
+    bool TryFindUnknownTarget() //目標地点決定
+    {
+        Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
+        if (targetTerrain == null)
+        {
+            return false;
+        }
+
+        terrain = targetTerrain;
+        int attempts = Mathf.Max(1, maxTargetSearchAttemptsPerFrame);
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            float angle = Random.Range(-60f, 60f);
+            Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
+            float distance = Random.Range(minTargetDistance, scanRadius);
+
+            Vector3 target = transform.position + dir * distance;
+
+            target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
+
+            if(IsInsideTerrain(target) && IsValidPoint(target) && !HasSteepSlopeOnPath(transform.position,target)) 
+            {
+                hasTarget = true;
+                targetPosition = target;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     bool IsInsideTerrain(Vector3 point) //terrain範囲外への移動防止
     {
-        Vector3 terrainPos = terrain.transform.position;
+        Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
+        if (targetTerrain == null)
+        {
+            return false;
+        }
 
-        Vector3 terrainSize = terrain.terrainData.size;
+        Vector3 terrainPos = targetTerrain.transform.position;
+
+        Vector3 terrainSize = targetTerrain.terrainData.size;
 
         bool insideX =
             point.x >= terrainPos.x + terrainMargin &&
@@ -270,23 +231,34 @@ public class Explorer : MonoBehaviour
         return !blocked;
     }
 
-    bool CrossBlockedSlope(Vector3 start, Vector3 end)
+    //改善の必要あり
+    bool HasSteepSlopeOnPath(Vector3 start, Vector3 end) //現在地点→目標地点　急な斜面防止
     {
-        int samples = 30;
+        int samples = 10;
 
         for(int i = 0; i <= samples; i++)
         {
-            float t =
-                i / (float)samples;
+            float t = i / (float)samples;
 
             Vector3 p =
-                Vector3.Lerp(
-                    start,
-                    end,
-                    t
+                Vector3.Lerp(start, end, t);
+
+            Vector3 normal =
+                terrain.terrainData.GetInterpolatedNormal(
+                    (p.x - terrain.transform.position.x)
+                    / terrain.terrainData.size.x,
+
+                    (p.z - terrain.transform.position.z)
+                    / terrain.terrainData.size.z
                 );
 
-            if(IsBlockedSlope(p))
+            float slope =
+                Vector3.Angle(
+                    normal,
+                    Vector3.up
+                );
+
+            if(slope > 40f)
                 return true;
         }
 
@@ -299,8 +271,7 @@ public class Explorer : MonoBehaviour
 
         stamina = Mathf.Clamp(stamina, 0f, 100f);
 
-        animator.SetFloat("Speed", 0f);
-        animator.SetFloat("MotionSpeed", 0f);
+        SetIdleAnimation();
 
         if (stamina >= restartThreshold)
         {
@@ -308,34 +279,44 @@ public class Explorer : MonoBehaviour
         }
     }
 
-    //改善の必要あり
-    void MoveToTarget()
+    void FollowDrone()
     {
-        //debug log
-        Debug.Log("Avoid:" + isAvoiding);
-        Debug.Log("HasObstacle:" + IsObstacleAhead());
-        Debug.Log("Distance:" +
-        Vector3.Distance(transform.position, targetPosition));
+        if (followTarget == null) return;
 
-        if(CrossBlockedSlope(transform.position, targetPosition))
+        targetPosition = followTarget.position - followTarget.forward * followBehindDistance;
+        if (terrain != null)
         {
-            hasTarget = false;
+            targetPosition.y = terrain.SampleHeight(targetPosition) + terrain.transform.position.y;
+        }
+        hasTarget = true;
+
+        if (Vector3.Distance(transform.position, targetPosition) <= followStopDistance)
+        {
+            SetIdleAnimation();
             return;
         }
 
-        stamina -= staminaDecreasePerSecond * Time.deltaTime;
-        stamina = Mathf.Clamp(stamina, 0f, 100f);
+        MoveToTarget(false);
+    }
 
-        if (stamina <= 0f)
+    //改善の必要あり
+    void MoveToTarget(bool consumeStamina = true)
+    {
+        if (consumeStamina)
         {
-            stamina = 0f;
-            isResting = true;
-            hasTarget = false;
+            stamina -= staminaDecreasePerSecond * Time.deltaTime;
+            stamina = Mathf.Clamp(stamina, 0f, 100f);
 
-            animator.SetFloat("Speed", 0f);
-            animator.SetFloat("MotionSpeed", 0f);
+            if (stamina <= 0f)
+            {
+                stamina = 0f;
+                isResting = true;
+                hasTarget = false;
 
-            return;
+                SetIdleAnimation();
+
+                return;
+            }
         }
 
         if (avoidTimer > 0)
@@ -376,12 +357,7 @@ public class Explorer : MonoBehaviour
 
         if (IsObstacleAhead() && !isAvoiding)
         {
-            avoidDirection = Random.value < 0.5f ? -1f : 1f;
-            avoidRotation = Quaternion.Euler(0, transform.eulerAngles.y + 45f + avoidDirection * 60f, 0);
-
-            avoidTimer = 5.0f;
-
-            isAvoiding = true;
+            StartAvoidance();
         }
         if (!hasTarget) return;
         Vector3 currentPos = transform.position;
@@ -411,100 +387,27 @@ public class Explorer : MonoBehaviour
 
         controller.Move(move * Time.deltaTime);
 
-        animator.SetFloat("Speed", moveSpeed);
-        animator.SetFloat("MotionSpeed", 1f);
+        if (animator != null)
+        {
+            animator.SetFloat("Speed", moveSpeed);
+            animator.SetFloat("MotionSpeed", 1f);
+        }
         float dist = Vector3.Distance(
             transform.position,
             targetPosition
         );
 
-        if (dist < 4f) hasTarget = false;
+        if (dist < 4f && followTarget == null) hasTarget = false;
     }
 
-    /*Explorer初期位置テレポート*/
-    public void TeleportToRandomInitialPosition()
+    private void SetIdleAnimation()
     {
-        if(terrain == null)
+        if (animator == null)
         {
-            Debug.LogError("[Explorer.cs:Set Terrain on Explorers Inspector]");
             return;
         }
-        TerrainData terrainData = terrain.terrainData;
-        Vector3 terrainPos = terrain.transform.position;
 
-        CharacterController cc = GetComponent <CharacterController>();
-
-        for (int attempt = 0; attempt < initialSpawnMaxAttempts; attempt++)
-        {
-            float randomX = Random.Range(terrainMargin, terrainData.size.x - terrainMargin);
-            float randomZ = Random.Range(terrainMargin, terrainData.size.z - terrainMargin);
-
-            float worldX = terrainPos.x + randomX;
-            float worldZ = terrainPos.z + randomZ;
-
-            float y = terrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPos.y;
-
-            Vector3 candidatePosition = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
-
-            if (!IsInsideTerrain(candidatePosition)) continue;
-
-            if (!IsValidInitialSpawnPoint(candidatePosition)) continue;
-
-            if (!IsSlopeValidForInitialSpawn(candidatePosition)) continue;
-
-            if(forestSpawner !=  null && !forestSpawner.IsFarEnoughFromTrees(candidatePosition, initialTreeDistance)) continue;
-
-            if (cc != null) cc.enabled = false;
-
-            transform.position = candidatePosition;
-
-            if (cc != null) cc.enabled = true;
-
-            hasTarget = false;
-            isAvoiding = false;
-            avoidTimer = 0f;
-            verticalVelocity = 0f;
-            lastCheckPosition = transform.position;
-
-            Debug.Log("Explorer position set: " + candidatePosition);
-
-            return;
-        }
-        Debug.LogWarning("[Explorer.cs]: cannot set Explorer on terrain safe position");
+        animator.SetFloat("Speed", 0f);
+        animator.SetFloat("MotionSpeed", 0f);
     }
-    bool IsValidInitialSpawnPoint(Vector3 point)
-    {
-        Vector3 checkCenter = point + Vector3.up * 1.0f;
-
-        bool blocked = Physics.CheckSphere(
-            checkCenter,
-            initialSpawnCheckRadius,
-            obstacleMask,
-            QueryTriggerInteraction.Collide
-        );
-
-        return !blocked;
-    }
-    bool IsSlopeValidForInitialSpawn(Vector3 point)
-    {
-        Vector3 terrainPos = terrain.transform.position;
-        Vector3 terrainSize = terrain.terrainData.size;
-
-        float normalizedX =
-            (point.x - terrainPos.x) / terrainSize.x;
-
-        float normalizedZ =
-            (point.z - terrainPos.z) / terrainSize.z;
-
-        Vector3 normal =
-            terrain.terrainData.GetInterpolatedNormal(
-                normalizedX,
-                normalizedZ
-            );
-
-        float slope = Vector3.Angle(normal, Vector3.up);
-
-        return slope <= initialMaxSlope;
-    }
-
 }
