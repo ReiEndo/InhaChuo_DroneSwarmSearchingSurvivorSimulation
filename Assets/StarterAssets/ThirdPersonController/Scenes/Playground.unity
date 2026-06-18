@@ -342,8 +342,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 196388c5514594c05b22b0614df4434c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::DroneSwarmDemoBootstrap
-  width: 50
-  depth: 50
+  width: 65
+  depth: 65
   cellSize: 2
   droneModelPrefab: {fileID: 919132149155446097, guid: 9eeaaf3cf9e0d3a46bc34ac060cf5e2a, type: 3}
   droneCount: 5
@@ -1705,7 +1705,12 @@ MonoBehaviour:
   minTargetDistance: 10
   moveSpeed: 3
   obstacleCheckDistance: 1
+  obstacleAvoidDuration: 1
+  obstacleAvoidAngle: 55
   terrainMargin: 10
+  maxTargetSearchAttemptsPerFrame: 32
+  followStopDistance: 3
+  followBehindDistance: 4
   obstacleMask:
     serializedVersion: 2
     m_Bits: 0
@@ -1715,6 +1720,12 @@ MonoBehaviour:
   restartThreshold: 50
   stuckCheckInterval: 3
   stuckDistanceThreshold: 1
+  forestSpawner: {fileID: 0}
+  initialTreeDistance: 5
+  initialSpawnMaxAttempts: 1000
+  initialSpawnYOffset: 0.1
+  initialSpawnCheckRadius: 1
+  initialMaxSlope: 35
 --- !u!1 &1764214107
 GameObject:
   m_ObjectHideFlags: 0
