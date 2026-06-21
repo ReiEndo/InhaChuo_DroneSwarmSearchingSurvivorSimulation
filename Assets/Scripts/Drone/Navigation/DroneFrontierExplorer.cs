@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(DroneSwarmAgentState))]
@@ -34,13 +35,19 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private bool replanRequested = true;
     private bool immediateReplanRequested;
     private DroneNative.DroneVec3i currentGoal;
+    private DroneNative.DroneVec3i homeCell;
     private float currentGoalChosenAt;
     private float currentGoalDistanceSquared;
     private bool hasGoal;
+    private bool hasHomeCell;
+    private bool returningHome;
+    private bool reachedHomeAfterTarget;
+    private readonly List<DroneNative.DroneVec3i> breadcrumbTrail = new();
     private readonly DroneFrontierGoalSelector goalSelector = new();
 
     public bool HasGoal => hasGoal;
     public DroneNative.DroneVec3i CurrentGoal => currentGoal;
+    public bool ReturningHome => returningHome;
     public DroneNative.DroneVec3i[] Path => path;
     public int UsablePathCount => usablePathCount;
     public int PathIndex => pathFollower != null ? pathFollower.PathIndex : pathIndex;
@@ -68,6 +75,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         if (sensor != null)
         {
             sensor.ObservationsChanged += HandleObservationsChanged;
+            sensor.TargetSensed += HandleTargetSensed;
         }
 
         if (agentState != null)
@@ -86,6 +94,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         if (sensor != null)
         {
             sensor.ObservationsChanged -= HandleObservationsChanged;
+            sensor.TargetSensed -= HandleTargetSensed;
         }
 
         if (agentState != null)
@@ -102,6 +111,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private void Start()
     {
         world = sensor.World;
+        CaptureHomeCellIfNeeded();
         RequestReplan();
     }
 
@@ -131,6 +141,8 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             }
         }
 
+        RecordBreadcrumb(world.WorldToGrid(transform.position));
+
         if (replanRequested && (immediateReplanRequested || Time.time >= nextReplanAt))
         {
             PlanNextRoute();
@@ -140,6 +152,35 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     public void RequestReplan()
     {
         replanRequested = true;
+    }
+
+    public void ConfigureHomeCell(DroneNative.DroneVec3i newHomeCell)
+    {
+        homeCell = newHomeCell;
+        hasHomeCell = true;
+    }
+
+    public void ReturnToHome()
+    {
+        CaptureHomeCellIfNeeded();
+        if (!hasHomeCell || reachedHomeAfterTarget)
+        {
+            return;
+        }
+
+        returningHome = true;
+        RequestImmediateReplan();
+    }
+
+    public void StopAfterTargetFound()
+    {
+        returningHome = false;
+        reachedHomeAfterTarget = true;
+        ClearPath();
+        if (pathFollower != null)
+        {
+            pathFollower.FollowPath = false;
+        }
     }
 
     private void RequestImmediateReplan()
@@ -158,8 +199,21 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         RequestReplan();
     }
 
+    private void HandleTargetSensed(DroneGridSensor changedSensor, DroneNative.DroneVec3i targetCell)
+    {
+        StopAfterTargetFound();
+    }
+
     private void HandlePathFinished(DronePathFollower follower)
     {
+        if (returningHome)
+        {
+            returningHome = false;
+            reachedHomeAfterTarget = true;
+            ClearPath();
+            return;
+        }
+
         RequestImmediateReplan();
     }
 
@@ -169,14 +223,24 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         immediateReplanRequested = false;
         nextReplanAt = Time.time + replanIntervalSeconds;
 
-        if (agentState.LocalMap == null)
+        if (agentState.LocalMap == null || reachedHomeAfterTarget)
         {
             ClearPath();
             return;
         }
 
+        CaptureHomeCellIfNeeded();
+
         var startCell = world.WorldToGrid(transform.position);
-        agentState.ObserveCell(startCell, DroneCellState.Free, Mathf.Max(Time.time, 0.0001f));
+        // Target sensing can happen earlier in the same frame as this replan. Use a
+        // slightly newer timestamp so the drone's current cell is traversable when
+        // plotting the route home from the found person.
+        float planningTimestamp = Mathf.Max(Time.time, 0.0001f) + 0.0001f;
+        agentState.ObserveCell(startCell, DroneCellState.Free, planningTimestamp);
+        if (hasHomeCell)
+        {
+            agentState.ObserveCell(homeCell, DroneCellState.Free, planningTimestamp);
+        }
 
         var snapshot = CreateReusablePlannerInputSnapshot();
         if (path == null || path.Length != maxPathLength)
@@ -218,6 +282,13 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         out DroneNative.DroneVec3i goalCell
     )
     {
+        if (returningHome && hasHomeCell)
+        {
+            goalCell = homeCell;
+            return TryPlanPath(startCell, goalCell, snapshot)
+                || TryBuildBreadcrumbReturnPath(startCell, goalCell);
+        }
+
         if (agentState.LocalMap.TryGetLatestTargetReport(out var targetReport))
         {
             goalCell = targetReport.Cell;
@@ -312,6 +383,76 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         pathIndex = 0;
         hasGoal = false;
         pathFollower?.ClearPath();
+    }
+
+    private void CaptureHomeCellIfNeeded()
+    {
+        if (hasHomeCell || world == null)
+        {
+            return;
+        }
+
+        homeCell = world.WorldToGrid(transform.position);
+        hasHomeCell = true;
+        RecordBreadcrumb(homeCell);
+    }
+
+    private void RecordBreadcrumb(DroneNative.DroneVec3i cell)
+    {
+        if (breadcrumbTrail.Count > 0
+            && DroneGridMath.CellsEqual(breadcrumbTrail[breadcrumbTrail.Count - 1], cell))
+        {
+            return;
+        }
+
+        breadcrumbTrail.Add(cell);
+    }
+
+    private bool TryBuildBreadcrumbReturnPath(
+        DroneNative.DroneVec3i startCell,
+        DroneNative.DroneVec3i goalCell
+    )
+    {
+        if (path == null || path.Length == 0)
+        {
+            return false;
+        }
+
+        int count = 0;
+        path[count++] = startCell;
+
+        int trailIndex = breadcrumbTrail.Count - 1;
+        while (trailIndex >= 0 && !DroneGridMath.CellsEqual(breadcrumbTrail[trailIndex], startCell))
+        {
+            trailIndex--;
+        }
+
+        if (trailIndex < 0)
+        {
+            trailIndex = breadcrumbTrail.Count - 1;
+        }
+
+        for (int i = trailIndex - 1; i >= 0 && count < path.Length; i--)
+        {
+            var breadcrumb = breadcrumbTrail[i];
+            if (!DroneGridMath.CellsEqual(path[count - 1], breadcrumb))
+            {
+                path[count++] = breadcrumb;
+            }
+
+            if (DroneGridMath.CellsEqual(breadcrumb, goalCell))
+            {
+                break;
+            }
+        }
+
+        if (!DroneGridMath.CellsEqual(path[count - 1], goalCell) && count < path.Length)
+        {
+            path[count++] = goalCell;
+        }
+
+        pathCount = count;
+        return count > 1 && DroneGridMath.CellsEqual(path[count - 1], goalCell);
     }
 
     private bool ShouldKeepCurrentGoal(

@@ -480,6 +480,34 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         {
             directTargetReporterIds.Add(agentState.DroneId);
         }
+
+        StopHumanAndFindingDrone(sensor, cell);
+    }
+
+    private void StopHumanAndFindingDrone(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
+    {
+        if (sensor == null || sensor.World == null)
+        {
+            return;
+        }
+
+        foreach (Explorer human in FindObjectsByType<Explorer>(FindObjectsSortMode.None))
+        {
+            if (human == null || human.IsStoppedAfterDroneFound)
+            {
+                continue;
+            }
+
+            var humanCell = sensor.World.WorldToGrid(human.transform.position);
+            if (humanCell.x == cell.x && humanCell.z == cell.z)
+            {
+                human.StopAfterFoundByDrone();
+                if (sensor.TryGetComponent<DroneFrontierExplorer>(out var explorer))
+                {
+                    explorer.StopAfterTargetFound();
+                }
+            }
+        }
     }
 
     private string MapViewLabel() => debugRenderer != null ? debugRenderer.CurrentMapViewLabel : "Merged";
