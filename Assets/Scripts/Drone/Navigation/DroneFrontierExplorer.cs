@@ -172,6 +172,17 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         RequestImmediateReplan();
     }
 
+    public void StopAfterTargetFound()
+    {
+        returningHome = false;
+        reachedHomeAfterTarget = true;
+        ClearPath();
+        if (pathFollower != null)
+        {
+            pathFollower.FollowPath = false;
+        }
+    }
+
     private void RequestImmediateReplan()
     {
         replanRequested = true;
@@ -190,7 +201,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
 
     private void HandleTargetSensed(DroneGridSensor changedSensor, DroneNative.DroneVec3i targetCell)
     {
-        ReturnToHome();
+        StopAfterTargetFound();
     }
 
     private void HandlePathFinished(DronePathFollower follower)
@@ -212,7 +223,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         immediateReplanRequested = false;
         nextReplanAt = Time.time + replanIntervalSeconds;
 
-        if (agentState.LocalMap == null)
+        if (agentState.LocalMap == null || reachedHomeAfterTarget)
         {
             ClearPath();
             return;

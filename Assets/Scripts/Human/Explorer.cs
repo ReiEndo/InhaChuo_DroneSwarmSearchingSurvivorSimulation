@@ -23,10 +23,8 @@ public class Explorer : MonoBehaviour
     private Vector3 targetPosition;     //目標地点
     private bool hasTarget = false;     //目標地点が定まっているか
 
-    [Header("ドローン追従")]
-    public float followStopDistance = 3f; //ドローンに近づきすぎない距離
-    public float followBehindDistance = 4f; //ドローンの少し後ろを目標にする距離
-    private Transform followTarget; //最初に発見したドローン
+    [Header("ドローン発見後")]
+    private bool stoppedAfterDroneFound; //ドローンに発見されたら停止
 
     private float verticalVelocity;     //重力用
     
@@ -81,12 +79,13 @@ public class Explorer : MonoBehaviour
 
     void Update() //フレームごとの更新
     {
-        CheckStuck();
-        if (followTarget != null)
+        if (stoppedAfterDroneFound)
         {
-            FollowDrone();
+            SetIdleAnimation();
             return;
         }
+
+        CheckStuck();
 
         if (isResting)
         {
@@ -103,20 +102,17 @@ public class Explorer : MonoBehaviour
         MoveToTarget();
     }
 
-    public bool IsFollowingDrone => followTarget != null;
+    public bool IsStoppedAfterDroneFound => stoppedAfterDroneFound;
 
-    public void StartFollowing(Transform droneTransform)
+    public void StopAfterFoundByDrone()
     {
-        if (followTarget != null || droneTransform == null)
-        {
-            return;
-        }
-
-        followTarget = droneTransform;
+        stoppedAfterDroneFound = true;
+        hasTarget = false;
         isResting = false;
-        hasTarget = true;
         isAvoiding = false;
         avoidTimer = 0f;
+        verticalVelocity = 0f;
+        SetIdleAnimation();
     }
 
     void CheckStuck() //スタック時目的地リセット
@@ -129,10 +125,7 @@ public class Explorer : MonoBehaviour
 
         if (moved < stuckDistanceThreshold)
         {
-            if (followTarget == null)
-            {
-                hasTarget = false;
-            }
+            hasTarget = false;
             isAvoiding = false;
             avoidTimer = 0f;
         }
@@ -289,26 +282,6 @@ public class Explorer : MonoBehaviour
         }
     }
 
-    void FollowDrone()
-    {
-        if (followTarget == null) return;
-
-        targetPosition = followTarget.position - followTarget.forward * followBehindDistance;
-        if (terrain != null)
-        {
-            targetPosition.y = terrain.SampleHeight(targetPosition) + terrain.transform.position.y;
-        }
-        hasTarget = true;
-
-        if (Vector3.Distance(transform.position, targetPosition) <= followStopDistance)
-        {
-            SetIdleAnimation();
-            return;
-        }
-
-        MoveToTarget(false);
-    }
-
     //改善の必要あり
     void MoveToTarget(bool consumeStamina = true)
     {
@@ -407,7 +380,7 @@ public class Explorer : MonoBehaviour
             targetPosition
         );
 
-        if (dist < 4f && followTarget == null) hasTarget = false;
+        if (dist < 4f) hasTarget = false;
     }
 
     private void SetIdleAnimation()
@@ -464,6 +437,7 @@ public class Explorer : MonoBehaviour
             if (cc != null) cc.enabled = true;
 
             hasTarget = false;
+            stoppedAfterDroneFound = false;
             isResting = false;
             isAvoiding = false;
             avoidTimer = 0f;

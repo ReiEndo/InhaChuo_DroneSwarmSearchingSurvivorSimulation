@@ -481,10 +481,10 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             directTargetReporterIds.Add(agentState.DroneId);
         }
 
-        AssignHumanToFirstFindingDrone(sensor, cell);
+        StopHumanAndFindingDrone(sensor, cell);
     }
 
-    private void AssignHumanToFirstFindingDrone(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
+    private void StopHumanAndFindingDrone(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
     {
         if (sensor == null || sensor.World == null)
         {
@@ -493,7 +493,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
         foreach (Explorer human in FindObjectsByType<Explorer>(FindObjectsSortMode.None))
         {
-            if (human == null || human.IsFollowingDrone)
+            if (human == null || human.IsStoppedAfterDroneFound)
             {
                 continue;
             }
@@ -501,7 +501,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             var humanCell = sensor.World.WorldToGrid(human.transform.position);
             if (humanCell.x == cell.x && humanCell.z == cell.z)
             {
-                human.StartFollowing(sensor.transform);
+                human.StopAfterFoundByDrone();
+                if (sensor.TryGetComponent<DroneFrontierExplorer>(out var explorer))
+                {
+                    explorer.StopAfterTargetFound();
+                }
             }
         }
     }
