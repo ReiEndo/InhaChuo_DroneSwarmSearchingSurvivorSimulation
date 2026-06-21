@@ -4,6 +4,8 @@ using UnityEngine;
 
 public sealed class DroneDemoSwarmSpawner
 {
+    private const float DroneFlightAltitude = 3f;
+
     private readonly Action<GameObject> registerSpawned;
 
     public DroneDemoSwarmSpawner(Action<GameObject> registerSpawned)
@@ -78,7 +80,7 @@ public sealed class DroneDemoSwarmSpawner
             var drone = Spawn($"Drone {i + 1:00}");
             drone.layer = nonSensedLayer;
             var start = starts[i % starts.Length];
-            drone.transform.position = world.GridToWorld(start, 0.35f) + new Vector3(0f, 0f, (i / starts.Length) * 0.15f);
+            drone.transform.position = world.GridToWorld(start, DroneFlightAltitude) + new Vector3(0f, 0f, (i / starts.Length) * 0.15f);
 
             var state = drone.AddComponent<DroneSwarmAgentState>();
             state.DroneId = i + 1;
