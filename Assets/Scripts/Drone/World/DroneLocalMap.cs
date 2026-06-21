@@ -98,10 +98,20 @@ public sealed class DroneLocalMap
             return false;
         }
 
-        if (targetReportsByReporter.TryGetValue(reporterId, out var existing)
-            && timestamp <= existing.ObservedAt)
+        if (targetReportsByReporter.TryGetValue(reporterId, out var existing))
         {
-            return false;
+            if (existing.Cell.x == cell.x
+                && existing.Cell.y == cell.y
+                && existing.Cell.z == cell.z)
+            {
+                return GetState(cell) != DroneCellState.Target
+                    && TrySetCell(cell, DroneCellState.Target, timestamp);
+            }
+
+            if (timestamp <= existing.ObservedAt)
+            {
+                return false;
+            }
         }
 
         targetReportsByReporter[reporterId] = new DroneTargetReport(cell, timestamp, reporterId);
@@ -169,6 +179,26 @@ public sealed class DroneLocalMap
         foreach (var candidate in targetReportsByReporter.Values)
         {
             if (!found || candidate.ObservedAt > report.ObservedAt)
+            {
+                report = candidate;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    public bool TryGetEarliestTargetReport(out DroneTargetReport report)
+    {
+        report = default;
+        bool found = false;
+
+        foreach (var candidate in targetReportsByReporter.Values)
+        {
+            if (!found
+                || candidate.ObservedAt < report.ObservedAt
+                || (Mathf.Approximately(candidate.ObservedAt, report.ObservedAt)
+                    && candidate.ReporterId < report.ReporterId))
             {
                 report = candidate;
                 found = true;

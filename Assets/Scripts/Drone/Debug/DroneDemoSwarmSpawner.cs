@@ -27,18 +27,20 @@ public sealed class DroneDemoSwarmSpawner
     {
         var explorers = new List<DroneFrontierExplorer>();
         var communicationNodes = new List<DroneCommunicationNode>();
-        var commandResult = BuildCommand(world, width, depth, communicationRadius, plannerType, nonSensedLayer, communicationNodes);
+        int expectedDroneCount = Mathf.Clamp(droneCount, 1, 12);
+        var commandResult = BuildCommand(world, width, depth, expectedDroneCount, communicationRadius, plannerType, nonSensedLayer, communicationNodes);
         BuildDrones(world, width, depth, droneCount, droneModelPrefab, sensorRadius, communicationRadius, plannerType, nonSensedLayer, targetSensedHandler, explorers, communicationNodes);
         return new DroneDemoSwarmSpawnResult(explorers, communicationNodes, commandResult.CommandState, commandResult.CommandRoutePlanner);
     }
 
-    private CommandSpawnResult BuildCommand(DroneDemoGridWorld world, int width, int depth, float communicationRadius, DroneNative.PlannerType plannerType, int nonSensedLayer, List<DroneCommunicationNode> communicationNodes)
+    private CommandSpawnResult BuildCommand(DroneDemoGridWorld world, int width, int depth, int expectedDroneCount, float communicationRadius, DroneNative.PlannerType plannerType, int nonSensedLayer, List<DroneCommunicationNode> communicationNodes)
     {
         var command = Spawn("Command");
         command.layer = nonSensedLayer;
         command.transform.position = world.GridToWorld(new DroneNative.DroneVec3i(1, 0, 1), 0.35f);
         var commandState = command.AddComponent<DroneSwarmAgentState>();
         commandState.DroneId = 0;
+        commandState.ConfigureSwarmMembership(expectedDroneCount);
         commandState.ConfigureMap(width, 1, depth);
 
         var node = command.AddComponent<DroneCommunicationNode>();
@@ -84,6 +86,7 @@ public sealed class DroneDemoSwarmSpawner
 
             var state = drone.AddComponent<DroneSwarmAgentState>();
             state.DroneId = i + 1;
+            state.ConfigureSwarmMembership(count);
             state.ConfigureMap(width, 1, depth);
 
             var sensor = drone.AddComponent<DroneGridSensor>();

@@ -45,6 +45,7 @@ public sealed class DroneSwarmTransportSession
     {
         ExchangeObservationsNewerThan(source, destination, linkKey);
         ExchangeReportsNewerThan(source, destination, linkKey);
+        destination.MergeTargetInformedDronesFrom(source);
     }
 
     private void ExchangeObservationsNewerThan(

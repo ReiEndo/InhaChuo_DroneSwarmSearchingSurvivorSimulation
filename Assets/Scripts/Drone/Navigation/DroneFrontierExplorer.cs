@@ -20,6 +20,15 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     [SerializeField] private int informationGainRadius = 2;
     [SerializeField] private float sameGoalPenalty = 25f;
     [SerializeField] private float nearbyDronePenaltyRadius = 6f;
+    [SerializeField] private float targetReturnDwellSeconds = 0.5f;
+
+    private enum TargetKnowledgeMode
+    {
+        SearchingForTarget,
+        HoldingTarget,
+        SearchingForDrones,
+        ReturningToTarget,
+    }
 
     private DroneSwarmAgentState agentState;
     private DroneGridSensor sensor;
@@ -42,12 +51,23 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private bool hasHomeCell;
     private bool returningHome;
     private bool reachedHomeAfterTarget;
+    private TargetKnowledgeMode targetKnowledgeMode = TargetKnowledgeMode.SearchingForTarget;
+    private DroneNative.DroneVec3i targetAnchorCell;
+    private bool hasTargetAnchorCell;
+    private int targetAnchorReporterId = -1;
+    private int lastTargetInformedDroneCount;
+    private bool dwellingAtTargetAnchor;
+    private float targetAnchorDwellUntil;
+    private bool missionComplete;
     private readonly List<DroneNative.DroneVec3i> breadcrumbTrail = new();
     private readonly DroneFrontierGoalSelector goalSelector = new();
 
     public bool HasGoal => hasGoal;
     public DroneNative.DroneVec3i CurrentGoal => currentGoal;
-    public bool ReturningHome => returningHome;
+    public bool ReturningHome => returningHome || targetKnowledgeMode == TargetKnowledgeMode.ReturningToTarget;
+    public bool HoldingTarget => targetKnowledgeMode == TargetKnowledgeMode.HoldingTarget;
+    public bool SearchingForDrones => targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones;
+    public int TargetAnchorReporterId => targetAnchorReporterId;
     public DroneNative.DroneVec3i[] Path => path;
     public int UsablePathCount => usablePathCount;
     public int PathIndex => pathFollower != null ? pathFollower.PathIndex : pathIndex;
@@ -81,6 +101,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         if (agentState != null)
         {
             agentState.LocalMapChanged += HandleLocalMapChanged;
+            agentState.TargetInformedDronesChanged += HandleTargetInformedDronesChanged;
         }
 
         if (pathFollower != null)
@@ -100,6 +121,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         if (agentState != null)
         {
             agentState.LocalMapChanged -= HandleLocalMapChanged;
+            agentState.TargetInformedDronesChanged -= HandleTargetInformedDronesChanged;
         }
 
         if (pathFollower != null)
@@ -128,6 +150,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         informationGainRadius = Mathf.Max(1, informationGainRadius);
         sameGoalPenalty = Mathf.Max(0f, sameGoalPenalty);
         nearbyDronePenaltyRadius = Mathf.Max(0f, nearbyDronePenaltyRadius);
+        targetReturnDwellSeconds = Mathf.Max(0f, targetReturnDwellSeconds);
     }
 
     private void Update()
@@ -142,6 +165,28 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         }
 
         RecordBreadcrumb(world.WorldToGrid(transform.position));
+
+        if (dwellingAtTargetAnchor)
+        {
+            if (Time.time < targetAnchorDwellUntil)
+            {
+                return;
+            }
+
+            dwellingAtTargetAnchor = false;
+            if (agentState.AllExpectedDronesTargetInformed)
+            {
+                replanRequested = false;
+                immediateReplanRequested = false;
+                ClearPath();
+                return;
+            }
+
+            if (!missionComplete)
+            {
+                RequestImmediateReplan();
+            }
+        }
 
         if (replanRequested && (immediateReplanRequested || Time.time >= nextReplanAt))
         {
@@ -174,8 +219,30 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
 
     public void StopAfterTargetFound()
     {
+        if (agentState != null
+            && agentState.LocalMap != null
+            && agentState.LocalMap.TryGetEarliestTargetReport(out var firstReport))
+        {
+            if (firstReport.ReporterId == agentState.DroneId)
+            {
+                BecomeTargetHolder(firstReport);
+            }
+            else
+            {
+                BecomeDroneSearcher(firstReport);
+            }
+            return;
+        }
+
+        targetKnowledgeMode = TargetKnowledgeMode.HoldingTarget;
+        StopInPlaceAsTargetHolder();
+    }
+
+    public void StopAfterMissionComplete()
+    {
+        missionComplete = true;
         returningHome = false;
-        reachedHomeAfterTarget = true;
+        dwellingAtTargetAnchor = false;
         ClearPath();
         if (pathFollower != null)
         {
@@ -189,6 +256,120 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         immediateReplanRequested = true;
     }
 
+    private void SynchronizeTargetKnowledgeState()
+    {
+        if (missionComplete || agentState == null || agentState.LocalMap == null)
+        {
+            return;
+        }
+
+        if (!agentState.LocalMap.TryGetEarliestTargetReport(out var firstReport))
+        {
+            targetKnowledgeMode = TargetKnowledgeMode.SearchingForTarget;
+            hasTargetAnchorCell = false;
+            targetAnchorReporterId = -1;
+            lastTargetInformedDroneCount = 0;
+            dwellingAtTargetAnchor = false;
+            reachedHomeAfterTarget = false;
+            if (pathFollower != null)
+            {
+                pathFollower.FollowPath = true;
+            }
+            return;
+        }
+
+        hasTargetAnchorCell = true;
+        targetAnchorCell = firstReport.Cell;
+        targetAnchorReporterId = firstReport.ReporterId;
+
+        if (firstReport.ReporterId == agentState.DroneId)
+        {
+            BecomeTargetHolder(firstReport);
+        }
+        else
+        {
+            BecomeDroneSearcher(firstReport);
+        }
+    }
+
+    private void BecomeTargetHolder(DroneTargetReport firstReport)
+    {
+        hasTargetAnchorCell = true;
+        targetAnchorCell = firstReport.Cell;
+        targetAnchorReporterId = firstReport.ReporterId;
+        targetKnowledgeMode = TargetKnowledgeMode.HoldingTarget;
+        lastTargetInformedDroneCount = agentState.TargetInformedDroneCount;
+        StopInPlaceAsTargetHolder();
+    }
+
+    private void StopInPlaceAsTargetHolder()
+    {
+        returningHome = false;
+        dwellingAtTargetAnchor = false;
+        reachedHomeAfterTarget = true;
+        ClearPath();
+        if (pathFollower != null)
+        {
+            pathFollower.FollowPath = false;
+        }
+    }
+
+    private void BecomeDroneSearcher(DroneTargetReport firstReport)
+    {
+        bool wasDroneSearcher = targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones
+            || targetKnowledgeMode == TargetKnowledgeMode.ReturningToTarget;
+        int informedDroneCount = agentState.TargetInformedDroneCount;
+        bool learnedAboutMoreDrones = wasDroneSearcher
+            && informedDroneCount > lastTargetInformedDroneCount;
+
+        hasTargetAnchorCell = true;
+        targetAnchorCell = firstReport.Cell;
+        targetAnchorReporterId = firstReport.ReporterId;
+        lastTargetInformedDroneCount = informedDroneCount;
+        returningHome = false;
+        reachedHomeAfterTarget = false;
+        if (pathFollower != null)
+        {
+            pathFollower.FollowPath = true;
+        }
+
+        if (IsAtTargetAnchor() && (dwellingAtTargetAnchor || agentState.AllExpectedDronesTargetInformed))
+        {
+            targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
+            ClearPath();
+            return;
+        }
+
+        bool shouldReturnToTarget = learnedAboutMoreDrones
+            || (wasDroneSearcher && agentState.AllExpectedDronesTargetInformed);
+        if (shouldReturnToTarget && !IsAtTargetAnchor())
+        {
+            dwellingAtTargetAnchor = false;
+            targetKnowledgeMode = TargetKnowledgeMode.ReturningToTarget;
+        }
+        else if (targetKnowledgeMode != TargetKnowledgeMode.ReturningToTarget || IsAtTargetAnchor())
+        {
+            targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
+        }
+
+        RequestImmediateReplan();
+    }
+
+    private bool IsAtTargetAnchor()
+    {
+        return hasTargetAnchorCell
+            && world != null
+            && DroneGridMath.CellsEqual(world.WorldToGrid(transform.position), targetAnchorCell);
+    }
+
+    private bool ShouldWaitAtTargetAnchorWithAllDrones()
+    {
+        return targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones
+            && agentState != null
+            && agentState.AllExpectedDronesTargetInformed
+            && IsAtTargetAnchor();
+    }
+
     private void HandleObservationsChanged(DroneGridSensor changedSensor)
     {
         RequestReplan();
@@ -196,16 +377,32 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
 
     private void HandleLocalMapChanged(DroneSwarmAgentState changedAgent)
     {
+        SynchronizeTargetKnowledgeState();
+        RequestReplan();
+    }
+
+    private void HandleTargetInformedDronesChanged(DroneSwarmAgentState changedAgent)
+    {
+        SynchronizeTargetKnowledgeState();
         RequestReplan();
     }
 
     private void HandleTargetSensed(DroneGridSensor changedSensor, DroneNative.DroneVec3i targetCell)
     {
-        StopAfterTargetFound();
+        SynchronizeTargetKnowledgeState();
     }
 
     private void HandlePathFinished(DronePathFollower follower)
     {
+        if (targetKnowledgeMode == TargetKnowledgeMode.ReturningToTarget)
+        {
+            targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
+            dwellingAtTargetAnchor = true;
+            targetAnchorDwellUntil = Time.time + targetReturnDwellSeconds;
+            ClearPath();
+            return;
+        }
+
         if (returningHome)
         {
             returningHome = false;
@@ -223,7 +420,11 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         immediateReplanRequested = false;
         nextReplanAt = Time.time + replanIntervalSeconds;
 
-        if (agentState.LocalMap == null || reachedHomeAfterTarget)
+        if (agentState.LocalMap == null
+            || reachedHomeAfterTarget
+            || dwellingAtTargetAnchor
+            || ShouldWaitAtTargetAnchorWithAllDrones()
+            || missionComplete)
         {
             ClearPath();
             return;
@@ -289,7 +490,19 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
                 || TryBuildBreadcrumbReturnPath(startCell, goalCell);
         }
 
-        if (agentState.LocalMap.TryGetLatestTargetReport(out var targetReport))
+        if (targetKnowledgeMode == TargetKnowledgeMode.ReturningToTarget && hasTargetAnchorCell)
+        {
+            goalCell = targetAnchorCell;
+            if (TryPlanPath(startCell, goalCell, snapshot))
+            {
+                return true;
+            }
+
+            targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
+        }
+
+        bool searchingForDrones = targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones;
+        if (!searchingForDrones && agentState.LocalMap.TryGetLatestTargetReport(out var targetReport))
         {
             goalCell = targetReport.Cell;
             return TryPlanPath(startCell, goalCell, snapshot);
