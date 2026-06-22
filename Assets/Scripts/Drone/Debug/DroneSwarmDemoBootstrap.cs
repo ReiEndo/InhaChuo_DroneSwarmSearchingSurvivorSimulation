@@ -52,6 +52,9 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private bool runtimeConfigInitialized;
     private bool resetQueued;
     private bool missionComplete;
+    private float nextStatusTextUpdateAt;
+    private readonly List<Explorer> cachedExplorers = new();
+    private float nextExplorerCacheRefreshAt = -1f;
 
     public void ResetDemo()
     {
@@ -117,6 +120,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         missionComplete = false;
         droneCameras.Clear();
         droneCameraViews.Clear();
+        cachedExplorers.Clear();
+        nextExplorerCacheRefreshAt = -1f;
         ReleaseDroneCameraTextures();
     }
 
@@ -456,6 +461,14 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             return;
         }
 
+        // Throttling to avoid building a new multiline string and the associated GC per frame
+        if (Time.time < nextStatusTextUpdateAt)
+        {
+            return;
+        }
+
+        nextStatusTextUpdateAt = Time.time + 0.2f;
+
         int knownCells = commandState != null && commandState.LocalMap != null
             ? commandState.LocalMap.CountKnownCells()
             : 0;
@@ -496,7 +509,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             return;
         }
 
-        foreach (Explorer human in FindObjectsByType<Explorer>(FindObjectsSortMode.None))
+        foreach (Explorer human in GetAliveExplorers())
         {
             if (human == null || human.IsStoppedAfterDroneFound)
             {
@@ -509,6 +522,30 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
                 human.StopAfterFoundByDrone();
             }
         }
+    }
+
+    private List<Explorer> GetAliveExplorers()
+    {
+        // only rescan when a cached entry is destroyed or the periodic refresh window elapses.
+        bool needsRefresh = Time.time >= nextExplorerCacheRefreshAt;
+        for (int i = 0; i < cachedExplorers.Count; i++)
+        {
+            if (cachedExplorers[i] == null)
+            {
+                needsRefresh = true;
+                break;
+            }
+        }
+
+        if (!needsRefresh)
+        {
+            return cachedExplorers;
+        }
+
+        cachedExplorers.Clear();
+        cachedExplorers.AddRange(FindObjectsByType<Explorer>(FindObjectsSortMode.None));
+        nextExplorerCacheRefreshAt = Time.time + 2f;
+        return cachedExplorers;
     }
 
     private void CheckMissionComplete()

@@ -5,6 +5,9 @@ public sealed class DroneSwarmTransportSession
     private readonly Dictionary<DroneSwarmDirectedLinkKey, Dictionary<int, float>> sentObservationTimes = new();
     private readonly Dictionary<DroneSwarmDirectedLinkKey, Dictionary<int, float>> sentReportTimes = new();
     private readonly List<DroneSwarmNodePairKey> activeLinks = new();
+    private DroneNative.DroneVec3i[] knownCellsBuffer = System.Array.Empty<DroneNative.DroneVec3i>();
+    private int[] knownStatesBuffer = System.Array.Empty<int>();
+    private float[] knownObservedAtBuffer = System.Array.Empty<float>();
 
     public IReadOnlyList<DroneSwarmNodePairKey> ActiveLinks => activeLinks;
 
@@ -54,18 +57,36 @@ public sealed class DroneSwarmTransportSession
         DroneSwarmDirectedLinkKey linkKey)
     {
         var sentByCell = GetOrCreateSentTimes(sentObservationTimes, linkKey);
+        DroneLocalMap sourceMap = source.LocalMap;
 
-        foreach (var observation in source.LocalMap.KnownObservations)
+        EnsureKnownObservationBuffers(sourceMap.CellCount);
+        int knownCount = sourceMap.BuildKnownObservationArrays(knownCellsBuffer, knownStatesBuffer, knownObservedAtBuffer);
+
+        for (int i = 0; i < knownCount; i++)
         {
-            int cellIndex = source.LocalMap.GridIndex(observation.Cell);
+            var cell = knownCellsBuffer[i];
+            int cellIndex = sourceMap.GridIndex(cell);
+            float observedAt = knownObservedAtBuffer[i];
+
             if (sentByCell.TryGetValue(cellIndex, out float sentAt)
-                && observation.ObservedAt <= sentAt)
+                && observedAt <= sentAt)
             {
                 continue;
             }
 
-            destination.ObserveCell(observation.Cell, observation.State, observation.ObservedAt);
-            sentByCell[cellIndex] = observation.ObservedAt;
+            DroneCellState state = sourceMap.GetState(cell);
+            destination.ObserveCell(cell, state, observedAt);
+            sentByCell[cellIndex] = observedAt;
+        }
+    }
+
+    private void EnsureKnownObservationBuffers(int requiredCapacity)
+    {
+        if (knownCellsBuffer.Length < requiredCapacity)
+        {
+            knownCellsBuffer = new DroneNative.DroneVec3i[requiredCapacity];
+            knownStatesBuffer = new int[requiredCapacity];
+            knownObservedAtBuffer = new float[requiredCapacity];
         }
     }
 

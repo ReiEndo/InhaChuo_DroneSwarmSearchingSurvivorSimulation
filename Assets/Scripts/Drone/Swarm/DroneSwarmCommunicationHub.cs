@@ -11,12 +11,17 @@ public sealed class DroneSwarmCommunicationHub : MonoBehaviour
     [Header("Tick")]
     [SerializeField] private float exchangeIntervalSeconds = 0.1f;
 
+    [Header("Node Discovery")]
+    [Tooltip("When auto-find is on, re-scan the scene for communication nodes at this interval instead of every tick. FindObjectsByType is expensive, so nodes are cached between scans and refreshed immediately if a cached node is destroyed.")]
+    [SerializeField] private float autoFindRefreshIntervalSeconds = 2f;
+
     [Header("Debug")]
     [SerializeField] private bool drawActiveLinks = true;
     [SerializeField] private Color activeLinkColor = Color.green;
 
     private readonly DroneSwarmTransportSession transportSession = new();
     private float nextExchangeAt;
+    private float nextAutoFindRefreshAt = -1f;
 
     public IReadOnlyList<DroneSwarmNodePairKey> ActiveLinks => transportSession.ActiveLinks;
 
@@ -33,6 +38,7 @@ public sealed class DroneSwarmCommunicationHub : MonoBehaviour
     private void OnValidate()
     {
         exchangeIntervalSeconds = Mathf.Max(0.01f, exchangeIntervalSeconds);
+        autoFindRefreshIntervalSeconds = Mathf.Max(0.1f, autoFindRefreshIntervalSeconds);
     }
 
     private void Update()
@@ -56,11 +62,27 @@ public sealed class DroneSwarmCommunicationHub : MonoBehaviour
 
         nodes.Clear();
         nodes.AddRange(FindObjectsByType<DroneCommunicationNode>(FindObjectsInactive.Exclude));
+        nextAutoFindRefreshAt = Time.time + autoFindRefreshIntervalSeconds;
+    }
+
+    private bool ShouldRefreshAutoFoundNodes()
+    {
+        // Fast path: reuse the cached node list as long as every entry is still alive
+        // A destroyed node is detected cheaply and triggers an immediate rescan
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            if (nodes[i] == null)
+            {
+                return true;
+            }
+        }
+
+        return Time.time >= nextAutoFindRefreshAt;
     }
 
     private void TickCommunication()
     {
-        if (autoFindNodes)
+        if (autoFindNodes && ShouldRefreshAutoFoundNodes())
         {
             RefreshNodes();
         }

@@ -214,6 +214,16 @@ public sealed class DroneLocalMap
         bool includeBlocked = true
     )
     {
+        return BuildKnownObservationArrays(knownCells, knownStates, null, includeBlocked);
+    }
+
+    public int BuildKnownObservationArrays(
+        DroneNative.DroneVec3i[] knownCells,
+        int[] knownStates,
+        float[] knownObservedAt,
+        bool includeBlocked = true
+    )
+    {
         if (knownCells == null)
         {
             throw new ArgumentNullException(nameof(knownCells));
@@ -225,6 +235,11 @@ public sealed class DroneLocalMap
         }
 
         int capacity = Mathf.Min(knownCells.Length, knownStates.Length);
+        if (knownObservedAt != null)
+        {
+            capacity = Mathf.Min(capacity, knownObservedAt.Length);
+        }
+
         int count = 0;
 
         for (int z = 0; z < depth; z++)
@@ -249,6 +264,10 @@ public sealed class DroneLocalMap
 
                     knownCells[count] = new DroneNative.DroneVec3i(x, y, z);
                     knownStates[count] = ToNativeState(state);
+                    if (knownObservedAt != null)
+                    {
+                        knownObservedAt[count] = observedAt[index];
+                    }
                     count++;
                 }
             }
