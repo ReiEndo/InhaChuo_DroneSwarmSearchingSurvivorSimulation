@@ -42,7 +42,7 @@ public class ForestSpawner : MonoBehaviour
 
     public IReadOnlyList<Vector2> SpawnTreePositions //外部参照用(forest_spawner.cs外からの中身の変更は不可)
     {
-        get { return SpawnTreePositions; }
+        get { return spawnedTreePositions; }
     }
 
     public bool IsFarEnoughFromTrees(Vector3 worldPosition, float distance)
