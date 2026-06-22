@@ -9,6 +9,8 @@ public sealed class DronePathFollower : MonoBehaviour
     [SerializeField] private bool followPath = true;
     [SerializeField] private float moveSpeed = 3f;
     [SerializeField] private float arriveDistance = 0.2f;
+    [Tooltip("Height above the terrain/ground that drones should fly at while following grid paths.")]
+    [SerializeField] private float flightAltitude = 3f;
 
     private DroneGridSensor sensor;
     private DroneLocalAvoidanceMotor avoidanceMotor;
@@ -45,6 +47,7 @@ public sealed class DronePathFollower : MonoBehaviour
     {
         moveSpeed = Mathf.Max(0f, moveSpeed);
         arriveDistance = Mathf.Max(0.001f, arriveDistance);
+        flightAltitude = Mathf.Max(0f, flightAltitude);
     }
 
     private void Update()
@@ -90,7 +93,7 @@ public sealed class DronePathFollower : MonoBehaviour
             return;
         }
 
-        Vector3 destination = world.GridToWorld(path[pathIndex], 0.35f);
+        Vector3 destination = GetWaypointPosition(path[pathIndex]);
         Vector3 toDestination = destination - transform.position;
         Vector3 preferredVelocity = toDestination.sqrMagnitude > Mathf.Epsilon
             ? toDestination.normalized * moveSpeed
@@ -120,7 +123,7 @@ public sealed class DronePathFollower : MonoBehaviour
     {
         while (pathIndex < usablePathCount)
         {
-            Vector3 destination = world.GridToWorld(path[pathIndex], 0.35f);
+            Vector3 destination = GetWaypointPosition(path[pathIndex]);
             if (Vector3.Distance(transform.position, destination) > arriveDistance)
             {
                 return;
@@ -137,7 +140,7 @@ public sealed class DronePathFollower : MonoBehaviour
             return;
         }
 
-        Vector3 currentDestination = world.GridToWorld(path[pathIndex], 0.35f);
+        Vector3 currentDestination = GetWaypointPosition(path[pathIndex]);
         Vector3 currentOffset = currentDestination - transform.position;
         if (Vector3.Distance(transform.position, currentDestination) <= arriveDistance
             || (currentDestination == previousDestination
@@ -146,6 +149,11 @@ public sealed class DronePathFollower : MonoBehaviour
             pathIndex++;
             AdvanceReachedWaypoints();
         }
+    }
+
+    private Vector3 GetWaypointPosition(DroneNative.DroneVec3i cell)
+    {
+        return world.GridToWorld(cell, flightAltitude);
     }
 
     private void NotifyPathFinished()

@@ -51,6 +51,10 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private DroneNative.PlannerType appliedPlannerType;
     private bool runtimeConfigInitialized;
     private bool resetQueued;
+    private bool missionComplete;
+    private float nextStatusTextUpdateAt;
+    private readonly List<Explorer> cachedExplorers = new();
+    private float nextExplorerCacheRefreshAt = -1f;
 
     public void ResetDemo()
     {
@@ -87,6 +91,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private void Update()
     {
         ApplyInspectorChanges();
+        CheckMissionComplete();
         UpdateStatusText();
     }
 
@@ -112,8 +117,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         explorers.Clear();
         communicationNodes.Clear();
         directTargetReporterIds.Clear();
+        missionComplete = false;
         droneCameras.Clear();
         droneCameraViews.Clear();
+        cachedExplorers.Clear();
+        nextExplorerCacheRefreshAt = -1f;
         ReleaseDroneCameraTextures();
     }
 
@@ -453,6 +461,14 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             return;
         }
 
+        // Throttling to avoid building a new multiline string and the associated GC per frame
+        if (Time.time < nextStatusTextUpdateAt)
+        {
+            return;
+        }
+
+        nextStatusTextUpdateAt = Time.time + 0.2f;
+
         int knownCells = commandState != null && commandState.LocalMap != null
             ? commandState.LocalMap.CountKnownCells()
             : 0;
@@ -461,7 +477,9 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         string route = commandRoutePlanner != null && commandRoutePlanner.HasRoute ? commandRoutePlanner.RouteCount.ToString() : "none";
         int links = communicationHub != null ? communicationHub.ActiveLinks.Count : 0;
         string mapView = debugRenderer != null ? debugRenderer.CurrentMapViewLabel : "Merged";
-        statusText.text = $"Planner: {plannerType}  Map: {mapView}\nCam range: {sensorRadius}  Comms: {communicationRadius:0.0}\nDrones: {droneCount}  Speed: {droneSpeed:0.0}  Links: {links}\nCameras: {droneCameras.Count}\nCommand known: {knownCells}\nTarget found: {swarmTarget}  Command: {commandTarget}\nRoute: {route}";
+        int informedDrones = CountBestKnownTargetInformedDrones();
+        string mission = missionComplete ? "complete" : "active";
+        statusText.text = $"Planner: {plannerType}  Map: {mapView}\nCam range: {sensorRadius}  Comms: {communicationRadius:0.0}\nDrones: {droneCount}  Speed: {droneSpeed:0.0}  Links: {links}\nCameras: {droneCameras.Count}\nCommand known: {knownCells}\nTarget found: {swarmTarget}  Command: {commandTarget}\nInformed drones: {informedDrones}/{droneCount}  Mission: {mission}\nRoute: {route}";
     }
 
     private string PlannerLabel() => plannerType == DroneNative.PlannerType.ThetaStar ? "Theta*" : "A*";
@@ -481,17 +499,17 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             directTargetReporterIds.Add(agentState.DroneId);
         }
 
-        StopHumanAndFindingDrone(sensor, cell);
+        StopHumanAtTarget(sensor, cell);
     }
 
-    private void StopHumanAndFindingDrone(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
+    private void StopHumanAtTarget(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
     {
         if (sensor == null || sensor.World == null)
         {
             return;
         }
 
-        foreach (Explorer human in FindObjectsByType<Explorer>(FindObjectsSortMode.None))
+        foreach (Explorer human in GetAliveExplorers())
         {
             if (human == null || human.IsStoppedAfterDroneFound)
             {
@@ -502,12 +520,139 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             if (humanCell.x == cell.x && humanCell.z == cell.z)
             {
                 human.StopAfterFoundByDrone();
-                if (sensor.TryGetComponent<DroneFrontierExplorer>(out var explorer))
-                {
-                    explorer.StopAfterTargetFound();
-                }
             }
         }
+    }
+
+    private List<Explorer> GetAliveExplorers()
+    {
+        // only rescan when a cached entry is destroyed or the periodic refresh window elapses.
+        bool needsRefresh = Time.time >= nextExplorerCacheRefreshAt;
+        for (int i = 0; i < cachedExplorers.Count; i++)
+        {
+            if (cachedExplorers[i] == null)
+            {
+                needsRefresh = true;
+                break;
+            }
+        }
+
+        if (!needsRefresh)
+        {
+            return cachedExplorers;
+        }
+
+        cachedExplorers.Clear();
+        cachedExplorers.AddRange(FindObjectsByType<Explorer>(FindObjectsSortMode.None));
+        nextExplorerCacheRefreshAt = Time.time + 2f;
+        return cachedExplorers;
+    }
+
+    private void CheckMissionComplete()
+    {
+        if (missionComplete || directTargetReporterIds.Count == 0 || explorers.Count == 0)
+        {
+            return;
+        }
+
+        if (!AllExplorersKnowTargetFound())
+        {
+            return;
+        }
+
+        if (!TryGetFirstTargetFinderState(out var firstFinderState)
+            || !firstFinderState.AllExpectedDronesTargetInformed)
+        {
+            return;
+        }
+
+        missionComplete = true;
+        foreach (var explorer in explorers)
+        {
+            if (explorer != null)
+            {
+                explorer.StopAfterMissionComplete();
+            }
+        }
+    }
+
+    private bool AllExplorersKnowTargetFound()
+    {
+        foreach (var explorer in explorers)
+        {
+            if (explorer == null
+                || !explorer.TryGetComponent<DroneSwarmAgentState>(out var state)
+                || !state.KnowsTargetFound)
+            {
+                return false;
+            }
+        }
+
+        return explorers.Count > 0;
+    }
+
+    private int CountBestKnownTargetInformedDrones()
+    {
+        int bestCount = 0;
+        foreach (var explorer in explorers)
+        {
+            if (explorer != null && explorer.TryGetComponent<DroneSwarmAgentState>(out var state))
+            {
+                bestCount = Mathf.Max(bestCount, state.TargetInformedDroneCount);
+            }
+        }
+
+        if (commandState != null)
+        {
+            bestCount = Mathf.Max(bestCount, commandState.TargetInformedDroneCount);
+        }
+
+        return bestCount;
+    }
+
+    private bool TryGetFirstTargetFinderState(out DroneSwarmAgentState firstFinderState)
+    {
+        firstFinderState = null;
+        DroneTargetReport firstReport = default;
+        bool found = false;
+
+        foreach (var explorer in explorers)
+        {
+            if (explorer == null
+                || !explorer.TryGetComponent<DroneSwarmAgentState>(out var state)
+                || state.LocalMap == null
+                || !state.LocalMap.TryGetEarliestTargetReport(out var report))
+            {
+                continue;
+            }
+
+            if (!found
+                || report.ObservedAt < firstReport.ObservedAt
+                || (Mathf.Approximately(report.ObservedAt, firstReport.ObservedAt)
+                    && report.ReporterId < firstReport.ReporterId))
+            {
+                firstReport = report;
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            return false;
+        }
+
+        foreach (var explorer in explorers)
+        {
+            if (explorer != null
+                && explorer.TryGetComponent<DroneSwarmAgentState>(out var state)
+                && state.DroneId == firstReport.ReporterId)
+            {
+                firstFinderState = state;
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private string MapViewLabel() => debugRenderer != null ? debugRenderer.CurrentMapViewLabel : "Merged";

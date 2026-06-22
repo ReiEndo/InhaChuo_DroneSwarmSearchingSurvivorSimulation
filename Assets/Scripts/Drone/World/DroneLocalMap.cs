@@ -98,10 +98,20 @@ public sealed class DroneLocalMap
             return false;
         }
 
-        if (targetReportsByReporter.TryGetValue(reporterId, out var existing)
-            && timestamp <= existing.ObservedAt)
+        if (targetReportsByReporter.TryGetValue(reporterId, out var existing))
         {
-            return false;
+            if (existing.Cell.x == cell.x
+                && existing.Cell.y == cell.y
+                && existing.Cell.z == cell.z)
+            {
+                return GetState(cell) != DroneCellState.Target
+                    && TrySetCell(cell, DroneCellState.Target, timestamp);
+            }
+
+            if (timestamp <= existing.ObservedAt)
+            {
+                return false;
+            }
         }
 
         targetReportsByReporter[reporterId] = new DroneTargetReport(cell, timestamp, reporterId);
@@ -178,9 +188,39 @@ public sealed class DroneLocalMap
         return found;
     }
 
+    public bool TryGetEarliestTargetReport(out DroneTargetReport report)
+    {
+        report = default;
+        bool found = false;
+
+        foreach (var candidate in targetReportsByReporter.Values)
+        {
+            if (!found
+                || candidate.ObservedAt < report.ObservedAt
+                || (Mathf.Approximately(candidate.ObservedAt, report.ObservedAt)
+                    && candidate.ReporterId < report.ReporterId))
+            {
+                report = candidate;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
     public int BuildKnownCellArrays(
         DroneNative.DroneVec3i[] knownCells,
         int[] knownStates,
+        bool includeBlocked = true
+    )
+    {
+        return BuildKnownObservationArrays(knownCells, knownStates, null, includeBlocked);
+    }
+
+    public int BuildKnownObservationArrays(
+        DroneNative.DroneVec3i[] knownCells,
+        int[] knownStates,
+        float[] knownObservedAt,
         bool includeBlocked = true
     )
     {
@@ -195,6 +235,11 @@ public sealed class DroneLocalMap
         }
 
         int capacity = Mathf.Min(knownCells.Length, knownStates.Length);
+        if (knownObservedAt != null)
+        {
+            capacity = Mathf.Min(capacity, knownObservedAt.Length);
+        }
+
         int count = 0;
 
         for (int z = 0; z < depth; z++)
@@ -219,6 +264,10 @@ public sealed class DroneLocalMap
 
                     knownCells[count] = new DroneNative.DroneVec3i(x, y, z);
                     knownStates[count] = ToNativeState(state);
+                    if (knownObservedAt != null)
+                    {
+                        knownObservedAt[count] = observedAt[index];
+                    }
                     count++;
                 }
             }
