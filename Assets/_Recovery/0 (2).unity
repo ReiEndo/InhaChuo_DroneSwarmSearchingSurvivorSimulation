@@ -2329,6 +2329,7 @@ MonoBehaviour:
   restartThreshold: 50
   stuckCheckInterval: 3
   stuckDistanceThreshold: 1
+  maxWalkableSlope: 35
   forestSpawner: {fileID: 0}
   initialTreeDistance: 5
   initialSpawnMaxAttempts: 1000
