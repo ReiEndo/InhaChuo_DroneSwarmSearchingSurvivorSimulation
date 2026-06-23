@@ -30,6 +30,10 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
     [SerializeField] private Color targetColor = new(1f, 0.85f, 0.12f, 0.6f);
     [SerializeField] private Color frontierColor = new(0.25f, 1f, 0.25f, 0.75f);
     [SerializeField] private Color dronePathColor = new(1f, 1f, 0.2f, 0.9f);
+    [SerializeField] private bool buildRuntimeReturnPath = true;
+    [SerializeField] private Color returnPathColor = new(0.1f, 1f, 0.25f, 0.92f);
+    [SerializeField] private float returnPathHeightOffset = 0.16f;
+    [SerializeField] private float returnPathWidthScale = 0.28f;
 
     private readonly List<DroneSwarmAgentState> explorerStates = new();
     private DroneCellState[] mapStateCache = System.Array.Empty<DroneCellState>();
@@ -41,6 +45,7 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
     private bool lastBuildRuntimeTiles;
     private bool lastDrawUnknownCells;
     private DroneSwarmMapTileRenderer tileRenderer;
+    private DroneSwarmPathMeshRenderer returnPathRenderer;
 
     public MapViewMode CurrentMapViewMode => mapViewMode;
     public int SelectedDroneIndex => selectedDroneIndex;
@@ -112,12 +117,14 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
     private void Awake()
     {
         tileRenderer = new DroneSwarmMapTileRenderer(transform);
+        returnPathRenderer = new DroneSwarmPathMeshRenderer(transform);
     }
 
     private void OnDestroy()
     {
         UnsubscribeMapEvents();
         tileRenderer?.Clear();
+        returnPathRenderer?.Clear();
     }
 
     private void LateUpdate()
@@ -133,6 +140,8 @@ public sealed class DroneSwarmDebugRenderer : MonoBehaviour
             lastBuildRuntimeTiles = buildRuntimeTiles;
             lastDrawUnknownCells = drawUnknownCells;
         }
+
+        returnPathRenderer?.Update(world, explorers, buildRuntimeReturnPath, returnPathColor, returnPathHeightOffset, returnPathWidthScale);
     }
 
     private void OnDrawGizmos()
