@@ -19,6 +19,38 @@
           inherit system;
         };
 
+        analysisPython = pkgs.python3.withPackages (ps: with ps; [
+          pandas
+          numpy
+          matplotlib
+          seaborn
+          scipy
+        ]);
+
+        stat-collect = pkgs.writeShellApplication {
+          name = "stat-collect";
+          runtimeInputs = [ analysisPython ];
+          text = ''
+            python analysis/collect_telemetry.py "$@"
+          '';
+        };
+
+        stat-analyze = pkgs.writeShellApplication {
+          name = "stat-analyze";
+          runtimeInputs = [ analysisPython ];
+          text = ''
+            python analysis/analyze_telemetry.py "$@"
+          '';
+        };
+
+        stat-dashboard = pkgs.writeShellApplication {
+          name = "stat-dashboard";
+          runtimeInputs = [ analysisPython ];
+          text = ''
+            python analysis/plot_three_run_dashboard.py "$@"
+          '';
+        };
+
         dn-config = pkgs.writeShellApplication {
           name = "dn-config";
           runtimeInputs = with pkgs; [
@@ -217,11 +249,14 @@
             dn-format
             dn-lint
             dn-check
+            stat-collect
+            stat-analyze
+            stat-dashboard
             cmake
             ninja
             clang-tools
             gdb
-            python3
+            analysisPython
             dotnet-sdk
           ];
 
