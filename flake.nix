@@ -258,6 +258,7 @@
             gdb
             analysisPython
             dotnet-sdk
+            uv
           ];
 
           shellHook = ''
