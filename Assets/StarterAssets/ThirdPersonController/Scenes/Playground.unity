@@ -1784,6 +1784,7 @@ MonoBehaviour:
   stamina: 100
   staminaDecreasePerSecond: 5
   staminaRecoveryPerSecond: 7
+  recoveryDecay: 0.2
   restartThreshold: 50
   stuckCheckInterval: 3
   stuckDistanceThreshold: 1
@@ -1795,6 +1796,8 @@ MonoBehaviour:
   initialSpawnYOffset: 0.1
   initialSpawnCheckRadius: 1
   initialMaxSlope: 35
+  droneAnnouncementInterval: 10
+  droneHearingDistance: 10
 --- !u!1 &1764214107
 GameObject:
   m_ObjectHideFlags: 0
