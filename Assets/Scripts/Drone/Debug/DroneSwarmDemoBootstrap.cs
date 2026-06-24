@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using UnityEngine.SceneManagement;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -25,6 +26,22 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     [SerializeField] private float communicationRadius = 3.25f;
     [SerializeField] private float droneSpeed = 3f;
     [SerializeField] private DroneNative.PlannerType plannerType = DroneNative.PlannerType.AStar;
+
+    [Header("Telemetry")]
+    [SerializeField] private bool telemetryEnabled = true;
+    [SerializeField] private DroneMissionTelemetryRecorder telemetryRecorder;
+    [Tooltip("Optional automatic failure cutoff. Set to 0 to disable timeout-based session ending.")]
+    [SerializeField] private float telemetryTimeoutSeconds = 0f;
+
+    private string telemetryBatchId = string.Empty;
+    private bool telemetryHasBatchRunIndex;
+    private int telemetryBatchRunIndex;
+    private bool telemetryHasBatchConfigurationIndex;
+    private int telemetryBatchConfigurationIndex;
+    private bool telemetryHasBatchRepeatIndex;
+    private int telemetryBatchRepeatIndex;
+    private bool telemetryHasRandomSeed;
+    private int telemetryRandomSeed;
 
     private readonly List<DroneFrontierExplorer> explorers = new();
     private readonly List<DroneCommunicationNode> communicationNodes = new();
@@ -56,6 +73,66 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private readonly List<Explorer> cachedExplorers = new();
     private float nextExplorerCacheRefreshAt = -1f;
 
+    public bool MissionComplete => missionComplete;
+    public bool IsResetQueued => resetQueued;
+    public bool IsTelemetrySessionActive => telemetryRecorder != null && telemetryRecorder.HasActiveSession;
+    public string ActiveTelemetrySessionId => telemetryRecorder != null ? telemetryRecorder.ActiveSessionId : string.Empty;
+
+    public void ConfigureExperiment(
+        int newDroneCount,
+        int newSensorRadius,
+        float newCommunicationRadius,
+        float newDroneSpeed,
+        DroneNative.PlannerType newPlannerType,
+        float newTelemetryTimeoutSeconds = 0f,
+        bool enableTelemetry = true)
+    {
+        droneCount = Mathf.Clamp(newDroneCount, 1, 12);
+        sensorRadius = Mathf.Clamp(newSensorRadius, 1, 8);
+        communicationRadius = Mathf.Max(0f, newCommunicationRadius);
+        droneSpeed = Mathf.Max(0f, newDroneSpeed);
+        plannerType = newPlannerType;
+        telemetryTimeoutSeconds = Mathf.Max(0f, newTelemetryTimeoutSeconds);
+        telemetryEnabled = enableTelemetry;
+    }
+
+    public void SetTelemetryBatchContext(
+        string batchId,
+        int runIndex,
+        int configurationIndex,
+        int repeatIndex,
+        bool hasRandomSeed,
+        int randomSeed)
+    {
+        telemetryBatchId = batchId ?? string.Empty;
+        telemetryHasBatchRunIndex = runIndex >= 0;
+        telemetryBatchRunIndex = runIndex;
+        telemetryHasBatchConfigurationIndex = configurationIndex >= 0;
+        telemetryBatchConfigurationIndex = configurationIndex;
+        telemetryHasBatchRepeatIndex = repeatIndex >= 0;
+        telemetryBatchRepeatIndex = repeatIndex;
+        telemetryHasRandomSeed = hasRandomSeed;
+        telemetryRandomSeed = randomSeed;
+    }
+
+    public void ClearTelemetryBatchContext()
+    {
+        telemetryBatchId = string.Empty;
+        telemetryHasBatchRunIndex = false;
+        telemetryBatchRunIndex = 0;
+        telemetryHasBatchConfigurationIndex = false;
+        telemetryBatchConfigurationIndex = 0;
+        telemetryHasBatchRepeatIndex = false;
+        telemetryBatchRepeatIndex = 0;
+        telemetryHasRandomSeed = false;
+        telemetryRandomSeed = 0;
+    }
+
+    public void EndActiveTelemetrySession(string endReason, bool completed)
+    {
+        EndTelemetrySession(endReason, completed);
+    }
+
     public void ResetDemo()
     {
         if (resetQueued)
@@ -71,6 +148,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     {
         yield return null;
 
+        EndTelemetrySession("reset", false);
         ClearRuntimeState();
         BuildWorld();
         BuildSwarm();
@@ -80,6 +158,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         communicationHub.ResetCommunicationMemory();
         communicationHub.RefreshNodes();
         CaptureRuntimeConfig();
+        BeginTelemetrySession();
         resetQueued = false;
     }
 
@@ -91,11 +170,17 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private void Update()
     {
         ApplyInspectorChanges();
+        UpdateTelemetryMilestones();
         CheckMissionComplete();
+        UpdateTelemetryTimeout();
         UpdateStatusText();
     }
 
-    private void OnDestroy() => ReleaseDroneCameraTextures();
+    private void OnDestroy()
+    {
+        EndTelemetrySession("destroyed", false);
+        ReleaseDroneCameraTextures();
+    }
 
     private void OnValidate()
     {
@@ -106,6 +191,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         sensorRadius = Mathf.Clamp(sensorRadius, 1, 8);
         communicationRadius = Mathf.Max(0f, communicationRadius);
         droneSpeed = Mathf.Max(0f, droneSpeed);
+        telemetryTimeoutSeconds = Mathf.Max(0f, telemetryTimeoutSeconds);
 #if UNITY_EDITOR
         droneModelPrefab ??= AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Drone.fbx");
 #endif
@@ -472,7 +558,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         int knownCells = commandState != null && commandState.LocalMap != null
             ? commandState.LocalMap.CountKnownCells()
             : 0;
-        string swarmTarget = directTargetReporterIds.Count > 0 ? "yes" : "no";
+        int directFinders = directTargetReporterIds.Count;
+        string swarmTarget = directFinders > 0 ? $"yes ({directFinders})" : "no";
         string commandTarget = commandRoutePlanner != null && commandRoutePlanner.HasTargetReport ? "yes" : "no";
         string route = commandRoutePlanner != null && commandRoutePlanner.HasRoute ? commandRoutePlanner.RouteCount.ToString() : "none";
         int links = communicationHub != null ? communicationHub.ActiveLinks.Count : 0;
@@ -494,11 +581,17 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
     private void HandleDroneTargetSensed(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
     {
+        int reporterId = -1;
         if (sensor != null && sensor.TryGetComponent<DroneSwarmAgentState>(out var agentState))
         {
-            directTargetReporterIds.Add(agentState.DroneId);
+            reporterId = agentState.DroneId;
+            if (directTargetReporterIds.Add(reporterId))
+            {
+                nextStatusTextUpdateAt = 0f;
+            }
         }
 
+        RecordTelemetryTargetFound(reporterId, cell);
         StopHumanAtTarget(sensor, cell);
     }
 
@@ -548,6 +641,254 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         return cachedExplorers;
     }
 
+    private void BeginTelemetrySession()
+    {
+        if (!telemetryEnabled)
+        {
+            return;
+        }
+
+        var recorder = EnsureTelemetryRecorder();
+        if (recorder == null)
+        {
+            return;
+        }
+
+        recorder.BeginSession(BuildTelemetryConfig());
+    }
+
+    private DroneMissionTelemetryRecorder EnsureTelemetryRecorder()
+    {
+        if (telemetryRecorder != null)
+        {
+            return telemetryRecorder;
+        }
+
+        telemetryRecorder = GetComponent<DroneMissionTelemetryRecorder>();
+        if (telemetryRecorder == null)
+        {
+            telemetryRecorder = gameObject.AddComponent<DroneMissionTelemetryRecorder>();
+        }
+
+        return telemetryRecorder;
+    }
+
+    private void EndTelemetrySession(string endReason, bool completed)
+    {
+        if (telemetryRecorder != null && telemetryRecorder.HasActiveSession)
+        {
+            telemetryRecorder.EndSession(endReason, completed);
+        }
+    }
+
+    private void RecordTelemetryTargetFound(int reporterId, DroneNative.DroneVec3i cell)
+    {
+        if (!telemetryEnabled || telemetryRecorder == null || !telemetryRecorder.HasActiveSession)
+        {
+            return;
+        }
+
+        telemetryRecorder.RecordTargetFound(reporterId, cell);
+    }
+
+    private void UpdateTelemetryMilestones()
+    {
+        if (!telemetryEnabled || telemetryRecorder == null || !telemetryRecorder.HasActiveSession)
+        {
+            return;
+        }
+
+        if (commandState != null
+            && commandState.LocalMap != null
+            && commandState.LocalMap.TryGetEarliestTargetReport(out var commandReport))
+        {
+            telemetryRecorder.RecordCommandNotified(
+                commandReport.ReporterId,
+                commandReport.Cell,
+                CountBestKnownTargetInformedDrones());
+        }
+
+        foreach (var explorer in explorers)
+        {
+            if (explorer == null
+                || !explorer.TryGetComponent<DroneSwarmAgentState>(out var state)
+                || state.LocalMap == null
+                || !state.LocalMap.TryGetEarliestTargetReport(out var report))
+            {
+                continue;
+            }
+
+            telemetryRecorder.RecordDroneInformed(state.DroneId, report.Cell, state.TargetInformedDroneCount);
+        }
+
+        if (AllExplorersKnowTargetFound() && TryGetEarliestKnownTargetReport(out var earliestReport))
+        {
+            telemetryRecorder.RecordAllDronesInformed(
+                CountBestKnownTargetInformedDrones(),
+                earliestReport.Cell);
+        }
+    }
+
+    private void UpdateTelemetryTimeout()
+    {
+        if (!telemetryEnabled
+            || telemetryTimeoutSeconds <= 0f
+            || telemetryRecorder == null
+            || !telemetryRecorder.HasActiveSession
+            || telemetryRecorder.ElapsedSeconds < telemetryTimeoutSeconds)
+        {
+            return;
+        }
+
+        telemetryRecorder.EndSession("timeout", false);
+    }
+
+    private void RecordTelemetryMissionComplete()
+    {
+        if (!telemetryEnabled || telemetryRecorder == null || !telemetryRecorder.HasActiveSession)
+        {
+            return;
+        }
+
+        var targetCell = TryGetEarliestKnownTargetReport(out var earliestReport)
+            ? earliestReport.Cell
+            : default;
+        telemetryRecorder.RecordMissionComplete(CountBestKnownTargetInformedDrones(), targetCell);
+    }
+
+    private DroneMissionSessionConfig BuildTelemetryConfig()
+    {
+        var config = new DroneMissionSessionConfig
+        {
+            BatchId = telemetryBatchId,
+            HasBatchRunIndex = telemetryHasBatchRunIndex,
+            BatchRunIndex = telemetryBatchRunIndex,
+            HasBatchConfigurationIndex = telemetryHasBatchConfigurationIndex,
+            BatchConfigurationIndex = telemetryBatchConfigurationIndex,
+            HasBatchRepeatIndex = telemetryHasBatchRepeatIndex,
+            BatchRepeatIndex = telemetryBatchRepeatIndex,
+            HasRandomSeed = telemetryHasRandomSeed,
+            RandomSeed = telemetryRandomSeed,
+            SceneName = SceneManager.GetActiveScene().name,
+            PlannerType = plannerType.ToString(),
+            DroneCount = droneCount,
+            SensorRadius = sensorRadius,
+            CommunicationRadius = communicationRadius,
+            DroneSpeed = droneSpeed,
+            GridWidth = world != null ? world.Width : width,
+            GridDepth = world != null ? world.Depth : depth,
+            CellSize = world != null ? world.CellSize : cellSize,
+        };
+
+        if (TryGetTargetStartPose(out var targetCell, out var targetPosition))
+        {
+            config.HasTargetStartCell = true;
+            config.TargetStartCell = targetCell;
+            config.HasTargetStartWorldPosition = true;
+            config.TargetStartWorldPosition = targetPosition;
+
+            if (TryCalculateNearestDroneStartDistance(
+                targetCell,
+                targetPosition,
+                out float nearestCells,
+                out float nearestWorld))
+            {
+                config.HasNearestDroneStartDistance = true;
+                config.NearestDroneStartDistanceCells = nearestCells;
+                config.NearestDroneStartDistanceWorld = nearestWorld;
+            }
+        }
+
+        return config;
+    }
+
+    private bool TryGetTargetStartPose(out DroneNative.DroneVec3i targetCell, out Vector3 targetPosition)
+    {
+        targetCell = default;
+        targetPosition = default;
+
+        if (world == null)
+        {
+            return false;
+        }
+
+        foreach (Explorer human in GetAliveExplorers())
+        {
+            if (human == null)
+            {
+                continue;
+            }
+
+            targetPosition = human.transform.position;
+            targetCell = world.WorldToGrid(targetPosition);
+            return true;
+        }
+
+        var playerArmature = GameObject.Find("PlayerArmature");
+        if (playerArmature != null)
+        {
+            targetPosition = playerArmature.transform.position;
+            targetCell = world.WorldToGrid(targetPosition);
+            return true;
+        }
+
+        var target = GameObject.Find("Target");
+        if (target != null)
+        {
+            targetPosition = target.transform.position;
+            targetCell = world.WorldToGrid(targetPosition);
+            return true;
+        }
+
+        targetCell = new DroneNative.DroneVec3i(
+            Mathf.Clamp(world.Width - 3, 0, world.Width - 1),
+            0,
+            Mathf.Clamp(world.Depth - 3, 0, world.Depth - 1));
+        targetPosition = world.GridToWorld(targetCell, 0.25f);
+        return true;
+    }
+
+    private bool TryCalculateNearestDroneStartDistance(
+        DroneNative.DroneVec3i targetCell,
+        Vector3 targetPosition,
+        out float nearestCells,
+        out float nearestWorld)
+    {
+        nearestCells = 0f;
+        nearestWorld = 0f;
+        if (world == null || explorers.Count == 0)
+        {
+            return false;
+        }
+
+        float bestCellDistanceSquared = float.PositiveInfinity;
+        float bestWorldDistance = float.PositiveInfinity;
+        foreach (var explorer in explorers)
+        {
+            if (explorer == null)
+            {
+                continue;
+            }
+
+            var droneCell = world.WorldToGrid(explorer.transform.position);
+            bestCellDistanceSquared = Mathf.Min(
+                bestCellDistanceSquared,
+                DroneGridMath.SquaredDistance(droneCell, targetCell));
+            bestWorldDistance = Mathf.Min(
+                bestWorldDistance,
+                Vector3.Distance(explorer.transform.position, targetPosition));
+        }
+
+        if (float.IsPositiveInfinity(bestCellDistanceSquared) || float.IsPositiveInfinity(bestWorldDistance))
+        {
+            return false;
+        }
+
+        nearestCells = Mathf.Sqrt(bestCellDistanceSquared);
+        nearestWorld = bestWorldDistance;
+        return true;
+    }
+
     private void CheckMissionComplete()
     {
         if (missionComplete || directTargetReporterIds.Count == 0 || explorers.Count == 0)
@@ -567,6 +908,9 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         }
 
         missionComplete = true;
+        UpdateTelemetryMilestones();
+        RecordTelemetryMissionComplete();
+        EndTelemetrySession("mission_complete", true);
         foreach (var explorer in explorers)
         {
             if (explorer != null)
@@ -608,6 +952,42 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         }
 
         return bestCount;
+    }
+
+    private bool TryGetEarliestKnownTargetReport(out DroneTargetReport earliestReport)
+    {
+        earliestReport = default;
+        bool found = false;
+
+        if (commandState != null
+            && commandState.LocalMap != null
+            && commandState.LocalMap.TryGetEarliestTargetReport(out var commandReport))
+        {
+            earliestReport = commandReport;
+            found = true;
+        }
+
+        foreach (var explorer in explorers)
+        {
+            if (explorer == null
+                || !explorer.TryGetComponent<DroneSwarmAgentState>(out var state)
+                || state.LocalMap == null
+                || !state.LocalMap.TryGetEarliestTargetReport(out var report))
+            {
+                continue;
+            }
+
+            if (!found
+                || report.ObservedAt < earliestReport.ObservedAt
+                || (Mathf.Approximately(report.ObservedAt, earliestReport.ObservedAt)
+                    && report.ReporterId < earliestReport.ReporterId))
+            {
+                earliestReport = report;
+                found = true;
+            }
+        }
+
+        return found;
     }
 
     private bool TryGetFirstTargetFinderState(out DroneSwarmAgentState firstFinderState)

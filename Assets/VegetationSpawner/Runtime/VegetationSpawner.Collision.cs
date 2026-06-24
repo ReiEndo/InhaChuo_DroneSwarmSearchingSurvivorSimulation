@@ -70,35 +70,11 @@ namespace sc.terrain.vegetationspawner
                                 //Sample corners of cell
                                 if (highPrecisionCollision)
                                 {
-
-                                    Vector3[] corners = new Vector3[]
-                                    {
-                                        //BL corner
-                                        new Vector3(b.min.x, b.center.y, b.min.z),
-                                        //TL corner
-                                        new Vector3(b.min.x, b.center.y, b.min.z + b.size.z),
-                                        //BR corner
-                                        new Vector3(b.max.x, b.center.y, b.min.z),
-                                        //TR corner
-                                        new Vector3(b.max.x, b.center.y, b.max.z),
-                                    };
-
-                                    int hitCount = corners.Length;
-                                    for (int i = 0; i < corners.Length; i++)
-                                    {
-                                        if (Physics.Raycast(corners[i] + (Vector3.up * 100f), -Vector3.up, out hit, 150f, collisionLayerMask, QueryTriggerInteraction.Ignore))
-                                        {
-                                            //Require to check for type, since its possible to hit a neighboring terrains
-                                            if (hit.collider.GetType() == typeof(TerrainCollider))
-                                            {
-                                                hitCount--;
-                                            }
-                                        }
-                                        else
-                                        {
-                                            hitCount--;
-                                        }
-                                    }
+                                    int hitCount = 0;
+                                    if (CornerHitsCollision(new Vector3(b.min.x, b.center.y, b.min.z))) hitCount++;
+                                    if (CornerHitsCollision(new Vector3(b.min.x, b.center.y, b.min.z + b.size.z))) hitCount++;
+                                    if (CornerHitsCollision(new Vector3(b.max.x, b.center.y, b.min.z))) hitCount++;
+                                    if (CornerHitsCollision(new Vector3(b.max.x, b.center.y, b.max.z))) hitCount++;
 
                                     //Remove cell when all rays missed
                                     if (hitCount == 0) cell.subCells[sX, sZ] = null;
@@ -169,6 +145,12 @@ namespace sc.terrain.vegetationspawner
             }
 
             return false;
+        }
+
+        private bool CornerHitsCollision(Vector3 corner)
+        {
+            return Physics.Raycast(corner + (Vector3.up * 100f), -Vector3.up, out RaycastHit hit, 150f, collisionLayerMask, QueryTriggerInteraction.Ignore)
+                && hit.collider.GetType() != typeof(TerrainCollider);
         }
     }
 }

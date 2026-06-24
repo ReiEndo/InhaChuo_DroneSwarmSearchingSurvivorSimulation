@@ -74,6 +74,35 @@ public class ForestSpawner : MonoBehaviour
     }
     */
 
+    public void ClearSpawnedTrees()
+    {
+        for (int i = transform.childCount - 1; i >= 0; i--)
+        {
+            Transform child = transform.GetChild(i);
+            if (child == null)
+            {
+                continue;
+            }
+
+            if (Application.isPlaying)
+            {
+                Destroy(child.gameObject);
+            }
+            else
+            {
+                DestroyImmediate(child.gameObject);
+            }
+        }
+
+        spawnedTreePositions.Clear();
+    }
+
+    public void RespawnTrees()
+    {
+        ClearSpawnedTrees();
+        SpawnTrees();
+    }
+
     public void SpawnTrees()
     {
         TerrainData terrainData = terrain.terrainData;

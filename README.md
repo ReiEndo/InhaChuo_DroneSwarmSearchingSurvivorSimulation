@@ -59,3 +59,95 @@ Native/drone-navigation-native/build/compile_commands.json
 ```
 
 Point your editor or `clangd` integration at that file if it is not detected automatically.
+
+## Python Telemetry Analysis
+
+The project includes Python scripts for collecting and analyzing Unity drone mission telemetry
+available through the Nix development shell.
+
+### Input data
+
+Unity writes telemetry CSV files under `Application.persistentDataPath` in:
+
+```txt
+DroneTelemetry/session_summary.csv
+DroneTelemetry/session_events.csv
+```
+
+`session_summary.csv` contains one row per mission/session and is the main input for statistical analysis. `session_events.csv` contains event-level timeline data.
+
+### Collect telemetry
+
+Copy Unity telemetry CSVs into the repository:
+
+```bash
+stat-collect
+```
+
+By default this writes to:
+
+```txt
+data/telemetry/session_summary.csv
+data/telemetry/session_events.csv
+```
+
+options:
+
+```bash
+stat-collect --source /path/to/DroneTelemetry
+stat-collect --snapshot
+stat-collect --out data/telemetry
+```
+
+### Run analysis
+
+Generate derived metrics, summary tables, and plots:
+
+```bash
+stat-analyze
+```
+
+Default outputs:
+
+```txt
+analysis/output/tables/summary_with_derived_metrics.csv
+analysis/output/tables/grouped_metrics.csv
+analysis/output/tables/end_reason_counts.csv
+analysis/output/tables/distance_vs_find_correlation.csv
+analysis/output/plots/dashboard.png
+analysis/output/plots/details/*.png
+```
+
+Interrupted rows with `end_reason = destroyed` are filtered out by default.
+
+Include them with:
+
+```bash
+stat-analyze --include-destroyed
+```
+
+Use custom paths if needed:
+
+```bash
+stat-analyze --input data/telemetry --out analysis/output
+```
+
+### Dashboard only
+
+Regenerate only the dashboard image from an existing derived summary table:
+
+```bash
+stat-dashboard
+```
+
+This reads:
+
+```txt
+analysis/output/tables/summary_with_derived_metrics.csv
+```
+
+and writes:
+
+```txt
+analysis/output/plots/dashboard.png
+```

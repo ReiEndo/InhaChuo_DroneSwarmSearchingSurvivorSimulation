@@ -51,6 +51,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
     private bool hasHomeCell;
     private bool returningHome;
     private bool reachedHomeAfterTarget;
+    private bool searchFromTargetAnchorRequested;
     private TargetKnowledgeMode targetKnowledgeMode = TargetKnowledgeMode.SearchingForTarget;
     private DroneNative.DroneVec3i targetAnchorCell;
     private bool hasTargetAnchorCell;
@@ -229,7 +230,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             }
             else
             {
-                BecomeDroneSearcher(firstReport);
+                BecomeDroneSearcher(firstReport, HasDirectTargetReportFor(firstReport.Cell));
             }
             return;
         }
@@ -243,6 +244,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         missionComplete = true;
         returningHome = false;
         dwellingAtTargetAnchor = false;
+        searchFromTargetAnchorRequested = false;
         ClearPath();
         if (pathFollower != null)
         {
@@ -271,6 +273,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             lastTargetInformedDroneCount = 0;
             dwellingAtTargetAnchor = false;
             reachedHomeAfterTarget = false;
+            searchFromTargetAnchorRequested = false;
             if (pathFollower != null)
             {
                 pathFollower.FollowPath = true;
@@ -288,7 +291,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         }
         else
         {
-            BecomeDroneSearcher(firstReport);
+            BecomeDroneSearcher(firstReport, HasDirectTargetReportFor(firstReport.Cell));
         }
     }
 
@@ -299,6 +302,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         targetAnchorReporterId = firstReport.ReporterId;
         targetKnowledgeMode = TargetKnowledgeMode.HoldingTarget;
         lastTargetInformedDroneCount = agentState.TargetInformedDroneCount;
+        searchFromTargetAnchorRequested = false;
         StopInPlaceAsTargetHolder();
     }
 
@@ -307,6 +311,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         returningHome = false;
         dwellingAtTargetAnchor = false;
         reachedHomeAfterTarget = true;
+        searchFromTargetAnchorRequested = false;
         ClearPath();
         if (pathFollower != null)
         {
@@ -314,7 +319,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         }
     }
 
-    private void BecomeDroneSearcher(DroneTargetReport firstReport)
+    private void BecomeDroneSearcher(DroneTargetReport firstReport, bool forceSearchFromTargetAnchor = false)
     {
         bool wasDroneSearcher = targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones
             || targetKnowledgeMode == TargetKnowledgeMode.ReturningToTarget;
@@ -333,7 +338,14 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             pathFollower.FollowPath = true;
         }
 
-        if (IsAtTargetAnchor() && (dwellingAtTargetAnchor || agentState.AllExpectedDronesTargetInformed))
+        if (forceSearchFromTargetAnchor)
+        {
+            searchFromTargetAnchorRequested = true;
+        }
+
+        if (!forceSearchFromTargetAnchor
+            && IsAtTargetAnchor()
+            && (dwellingAtTargetAnchor || agentState.AllExpectedDronesTargetInformed))
         {
             targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
             ClearPath();
@@ -362,9 +374,18 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             && DroneGridMath.CellsEqual(world.WorldToGrid(transform.position), targetAnchorCell);
     }
 
+    private bool HasDirectTargetReportFor(DroneNative.DroneVec3i targetCell)
+    {
+        return agentState != null
+            && agentState.LocalMap != null
+            && agentState.LocalMap.TryGetTargetReport(agentState.DroneId, out var directReport)
+            && DroneGridMath.CellsEqual(directReport.Cell, targetCell);
+    }
+
     private bool ShouldWaitAtTargetAnchorWithAllDrones()
     {
-        return targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones
+        return !searchFromTargetAnchorRequested
+            && targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones
             && agentState != null
             && agentState.AllExpectedDronesTargetInformed
             && IsAtTargetAnchor();
@@ -399,6 +420,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
             dwellingAtTargetAnchor = true;
             targetAnchorDwellUntil = Time.time + targetReturnDwellSeconds;
+            searchFromTargetAnchorRequested = false;
             ClearPath();
             return;
         }
@@ -455,6 +477,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             return;
         }
 
+        searchFromTargetAnchorRequested = false;
         currentGoal = goalCell;
         currentGoalChosenAt = Time.time;
         currentGoalDistanceSquared = DroneGridMath.SquaredDistance(startCell, goalCell);
@@ -514,7 +537,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
             return true;
         }
 
-        goalSelector.Collect(agentState, world, startCell, CreateGoalSelectorSettings());
+        goalSelector.Collect(agentState, world, startCell, snapshot, CreateGoalSelectorSettings());
         int candidateCount = goalSelector.Count;
         int startIndex = candidateCount > 0
             ? Mathf.Abs(agentState.DroneId) % Mathf.Min(candidateCount, 8)

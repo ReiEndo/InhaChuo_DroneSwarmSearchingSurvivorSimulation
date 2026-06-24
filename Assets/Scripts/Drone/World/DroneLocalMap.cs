@@ -121,6 +121,11 @@ public sealed class DroneLocalMap
 
     public IEnumerable<DroneTargetReport> TargetReports => targetReportsByReporter.Values;
 
+    public bool TryGetTargetReport(int reporterId, out DroneTargetReport report)
+    {
+        return targetReportsByReporter.TryGetValue(reporterId, out report);
+    }
+
     public IEnumerable<DroneCellObservation> KnownObservations
     {
         get

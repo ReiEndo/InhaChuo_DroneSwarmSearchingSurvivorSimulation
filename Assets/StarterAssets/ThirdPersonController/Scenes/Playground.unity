@@ -347,10 +347,13 @@ MonoBehaviour:
   cellSize: 2
   droneModelPrefab: {fileID: 919132149155446097, guid: 9eeaaf3cf9e0d3a46bc34ac060cf5e2a, type: 3}
   droneCount: 5
-  sensorRadius: 2
+  sensorRadius: 8
   communicationRadius: 8
   droneSpeed: 8
   plannerType: 1
+  telemetryEnabled: 1
+  telemetryRecorder: {fileID: 0}
+  telemetryTimeoutSeconds: 0
 --- !u!4 &633502257
 Transform:
   m_ObjectHideFlags: 0
@@ -1239,6 +1242,72 @@ Transform:
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 2114283753834967213}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1190845561
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1190845563}
+  - component: {fileID: 1190845562}
+  m_Layer: 0
+  m_Name: Runner
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1190845562
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1190845561}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 180bfba7332144f0b2c6cfb2b4194130, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DroneMissionBatchRunner
+  bootstrap: {fileID: 633502256}
+  terrainGenerator: {fileID: 986082011}
+  forestSpawner: {fileID: 2138067897}
+  explorer: {fileID: 1762682267}
+  autoStartOnPlay: 1
+  startDelaySeconds: 0.5
+  betweenRunsDelaySeconds: 0.25
+  sessionStartTimeoutSeconds: 10
+  perSessionTimeoutSeconds: 120
+  repetitionsPerConfiguration: 3
+  stopBatchIfSessionFailsToStart: 1
+  regenerateTerrainEachRun: 1
+  clearForestBeforeSpawning: 1
+  spawnForestEachRun: 1
+  respawnExplorerEachRun: 1
+  useDeterministicSeeds: 1
+  baseSeed: 10000
+  droneCount: 5
+  sensorRadius: 8
+  communicationRadius: 8
+  droneSpeed: 8
+  plannerType: 1
+--- !u!4 &1190845563
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1190845561}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 31.39017, y: 15.0084, z: 49.57582}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &1221041499
 PrefabInstance:
@@ -2274,3 +2343,4 @@ SceneRoots:
   - {fileID: 2138067898}
   - {fileID: 633502257}
   - {fileID: 1680071146}
+  - {fileID: 1190845563}
