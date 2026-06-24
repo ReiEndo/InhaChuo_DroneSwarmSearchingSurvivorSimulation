@@ -66,10 +66,7 @@ namespace sc.terrain.vegetationspawner
             
             List<TreeInstance> treeInstanceCollection = new List<TreeInstance>(terrain.terrainData.treeInstances);
             //Clear all existing instances first, setting the tree instances is additive
-            for (int i = 0; i < treeInstanceCollection.Count; i++)
-            {
-                treeInstanceCollection.RemoveAll(x => x.prototypeIndex == prototypeIndex);
-            }
+            treeInstanceCollection.RemoveAll(x => x.prototypeIndex == prototypeIndex);
             
             terrain.terrainData.SetTreeInstances(treeInstanceCollection.ToArray(), false);
             
