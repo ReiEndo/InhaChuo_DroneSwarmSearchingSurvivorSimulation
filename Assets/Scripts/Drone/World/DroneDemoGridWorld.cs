@@ -16,6 +16,7 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
     [SerializeField] private float cellProbeRadiusScale = 0.35f;
 
     private readonly HashSet<int> terrainTreeBlockedCells = new();
+    private Collider[] targetOverlapBuffer = new Collider[8];
     private Terrain surfaceTerrain;
 
     public Vector3 GridOrigin => gridOrigin;
@@ -135,11 +136,32 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
 
         if (targetLayers.value != 0)
         {
-            foreach (Collider hit in Physics.OverlapSphere(center, targetProbeRadius, targetLayers, QueryTriggerInteraction.Collide))
+            int hitCount = Physics.OverlapSphereNonAlloc(
+                center,
+                targetProbeRadius,
+                targetOverlapBuffer,
+                targetLayers,
+                QueryTriggerInteraction.Collide
+            );
+
+            if (hitCount == targetOverlapBuffer.Length)
             {
-                if (WorldToGrid(hit.transform.position).x == cell.x && WorldToGrid(hit.transform.position).z == cell.z)
+                foreach (Collider hit in Physics.OverlapSphere(center, targetProbeRadius, targetLayers, QueryTriggerInteraction.Collide))
                 {
-                    return DroneCellState.Target;
+                    if (IsTargetInCell(hit, cell))
+                    {
+                        return DroneCellState.Target;
+                    }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < hitCount; i++)
+                {
+                    if (IsTargetInCell(targetOverlapBuffer[i], cell))
+                    {
+                        return DroneCellState.Target;
+                    }
                 }
             }
         }
@@ -167,6 +189,12 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
     }
 
     private int CellKey(DroneNative.DroneVec3i cell) => (cell.y * depth + cell.z) * width + cell.x;
+
+    private bool IsTargetInCell(Collider hit, DroneNative.DroneVec3i cell)
+    {
+        var hitCell = WorldToGrid(hit.transform.position);
+        return hitCell.x == cell.x && hitCell.z == cell.z;
+    }
 
     private void OnDrawGizmosSelected()
     {

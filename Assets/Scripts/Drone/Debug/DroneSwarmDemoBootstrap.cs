@@ -558,7 +558,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         int knownCells = commandState != null && commandState.LocalMap != null
             ? commandState.LocalMap.CountKnownCells()
             : 0;
-        string swarmTarget = directTargetReporterIds.Count > 0 ? "yes" : "no";
+        int directFinders = directTargetReporterIds.Count;
+        string swarmTarget = directFinders > 0 ? $"yes ({directFinders})" : "no";
         string commandTarget = commandRoutePlanner != null && commandRoutePlanner.HasTargetReport ? "yes" : "no";
         string route = commandRoutePlanner != null && commandRoutePlanner.HasRoute ? commandRoutePlanner.RouteCount.ToString() : "none";
         int links = communicationHub != null ? communicationHub.ActiveLinks.Count : 0;
@@ -584,7 +585,10 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         if (sensor != null && sensor.TryGetComponent<DroneSwarmAgentState>(out var agentState))
         {
             reporterId = agentState.DroneId;
-            directTargetReporterIds.Add(reporterId);
+            if (directTargetReporterIds.Add(reporterId))
+            {
+                nextStatusTextUpdateAt = 0f;
+            }
         }
 
         RecordTelemetryTargetFound(reporterId, cell);

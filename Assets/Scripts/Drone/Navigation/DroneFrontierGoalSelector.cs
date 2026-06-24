@@ -19,9 +19,9 @@ public sealed class DroneFrontierGoalSelector
     private readonly List<int> m_ExpiredRecentGoalKeys = new();
     private readonly List<DroneNative.DroneVec3i> m_RecentGoalCells = new();
     private readonly List<DroneNative.DroneVec3i> m_OccupiedGoalCells = new();
-    private DroneNative.DroneVec3i[] m_KnownCells = Array.Empty<DroneNative.DroneVec3i>();
-    private int[] m_KnownStates = Array.Empty<int>();
     private DroneNative.DroneFrontierCandidate[] m_NativeCandidates = Array.Empty<DroneNative.DroneFrontierCandidate>();
+    private DroneNative.DroneVec3i[] m_RecentGoalCellsBuffer = Array.Empty<DroneNative.DroneVec3i>();
+    private DroneNative.DroneVec3i[] m_OccupiedGoalCellsBuffer = Array.Empty<DroneNative.DroneVec3i>();
 
     public struct Settings
     {
@@ -46,6 +46,7 @@ public sealed class DroneFrontierGoalSelector
         DroneSwarmAgentState agentState,
         DroneDemoGridWorld world,
         DroneNative.DroneVec3i startCell,
+        DronePlannerInputSnapshot snapshot,
         Settings settings
     )
     {
@@ -59,7 +60,6 @@ public sealed class DroneFrontierGoalSelector
         BuildRecentGoalCells(agentState.LocalMap, settings);
         BuildOccupiedGoalCells(agentState, settings);
 
-        var snapshot = CreateReusablePlannerInputSnapshot(agentState.LocalMap);
         var nativeSettings = new DroneNative.DroneFrontierScoringSettings
         {
             travel_cost_weight = Mathf.Max(0f, settings.TravelCostWeight),
@@ -70,8 +70,14 @@ public sealed class DroneFrontierGoalSelector
             nearby_drone_penalty_radius = Mathf.Max(0f, settings.NearbyDronePenaltyRadius),
         };
 
-        DroneNative.DroneVec3i[] recentGoalCells = ToOptionalArray(m_RecentGoalCells);
-        DroneNative.DroneVec3i[] occupiedGoalCells = ToOptionalArray(m_OccupiedGoalCells);
+        DroneNative.DroneVec3i[] recentGoalCells = CopyToOptionalBuffer(
+            m_RecentGoalCells,
+            ref m_RecentGoalCellsBuffer
+        );
+        DroneNative.DroneVec3i[] occupiedGoalCells = CopyToOptionalBuffer(
+            m_OccupiedGoalCells,
+            ref m_OccupiedGoalCellsBuffer
+        );
 
         int required = DroneNative.DroneRankFrontierCandidates(
             agentState.LocalMap.Width,
@@ -156,19 +162,6 @@ public sealed class DroneFrontierGoalSelector
         return false;
     }
 
-    private DronePlannerInputSnapshot CreateReusablePlannerInputSnapshot(DroneLocalMap localMap)
-    {
-        int requiredCapacity = localMap.CellCount;
-        if (m_KnownCells.Length != requiredCapacity)
-        {
-            m_KnownCells = new DroneNative.DroneVec3i[requiredCapacity];
-            m_KnownStates = new int[requiredCapacity];
-        }
-
-        int knownCount = localMap.BuildKnownCellArrays(m_KnownCells, m_KnownStates);
-        return DronePlannerInputSnapshot.Wrap(m_KnownCells, m_KnownStates, knownCount);
-    }
-
     private void BuildRecentGoalCells(DroneLocalMap localMap, Settings settings)
     {
         m_RecentGoalCells.Clear();
@@ -206,9 +199,28 @@ public sealed class DroneFrontierGoalSelector
         }
     }
 
-    private static DroneNative.DroneVec3i[] ToOptionalArray(List<DroneNative.DroneVec3i> cells)
+    private static DroneNative.DroneVec3i[] CopyToOptionalBuffer(
+        List<DroneNative.DroneVec3i> cells,
+        ref DroneNative.DroneVec3i[] buffer
+    )
     {
-        return cells.Count > 0 ? cells.ToArray() : null;
+        int count = cells.Count;
+        if (count == 0)
+        {
+            return null;
+        }
+
+        if (buffer.Length < count)
+        {
+            buffer = new DroneNative.DroneVec3i[count];
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            buffer[i] = cells[i];
+        }
+
+        return buffer;
     }
 
     private void EnsureNativeCandidateCapacity(int required)
