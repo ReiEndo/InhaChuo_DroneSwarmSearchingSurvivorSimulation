@@ -153,7 +153,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         BuildWorld();
         BuildSwarm();
         BuildDebugRenderer();
-        BuildUi();
+        //新たにUIを作成するためコメントアウト↓
+        //BuildUi();
 
         communicationHub.ResetCommunicationMemory();
         communicationHub.RefreshNodes();
@@ -239,7 +240,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         commandState = result.CommandState;
         commandRoutePlanner = result.CommandRoutePlanner;
         ApplyDroneSpeed();
-        BuildDroneCameras();
+        //UI新規作成のためコメントアウト↓
+        //BuildDroneCameras();
     }
 
     private void BuildDebugRenderer()
