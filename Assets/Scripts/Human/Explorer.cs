@@ -37,6 +37,7 @@ public class Explorer : MonoBehaviour
     public float stamina = 100f; //体力フル
     public float staminaDecreasePerSecond = 5f;     //体力減少速度
     public float staminaRecoveryPerSecond = 7f;     //体力回復速度
+    public float recoveryDecay = 0.2f;              //疲労
     public float restartThreshold = 50f;  //休憩→移動への体力必要値
     private bool isResting = false;  //true:移動 false:休憩
 
@@ -59,6 +60,12 @@ public class Explorer : MonoBehaviour
     public float initialSpawnYOffset = 0.1f;
     public float initialSpawnCheckRadius = 1.0f;
     public float initialMaxSlope = 35f;
+
+    [Header("Drone Announcement Hearing")]
+    public float droneAnnouncementInterval = 10f;
+    public float droneHearingDistance = 10f;
+    private float droneAnnouncementTimer = 0f;
+    private Transform nearestDrone;
 
     /*
     Scripts\ScriptControl\ScriptsControl.csにて制御
@@ -94,6 +101,13 @@ public class Explorer : MonoBehaviour
         }
 
         CheckStuck();
+        droneAnnouncementTimer += Time.deltaTime;
+
+        if(droneAnnouncementTimer >= droneAnnouncementInterval)
+        {
+            OnDroneAnnouncement();
+            droneAnnouncementTimer = 0f;
+        }
 
         if (isResting)
         {
@@ -195,6 +209,47 @@ public class Explorer : MonoBehaviour
         int z = Mathf.RoundToInt(nz * (slopeResolution - 1));
 
         return blockedSlopeMap[x, z];
+    }
+
+    void OnDroneAnnouncement() //音の届く距離にdroneがいるかどうか
+    {
+        DroneFrontierExplorer[] drones = FindObjectsByType<DroneFrontierExplorer>();
+
+        float nearestDistance = Mathf.Infinity;
+
+        nearestDrone = null;
+
+        foreach(var drone in drones)
+        {
+            float dist = Vector3.Distance(transform.position, drone.transform.position);
+
+            if(dist < nearestDistance)
+            {
+                nearestDistance = dist;
+                nearestDrone = drone.transform;
+            }
+        }
+
+        if(nearestDrone == null)
+            return;
+
+        if(nearestDistance > droneHearingDistance)
+            return;
+
+        SetTargetTowardDrone();
+    }
+
+    void SetTargetTowardDrone() //droneの方向へ向かう
+    {
+        Vector3 target = nearestDrone.position;
+
+        target.y = terrain.SampleHeight(target);
+
+        if(IsInsideTerrain(target) && IsValidPoint(target) && !CrossBlockedSlope(transform.position, target))
+        {
+            targetPosition = target;
+            hasTarget = true;
+        }
     }
 
     void CheckStuck() //スタック時目的地リセット
@@ -372,6 +427,9 @@ public class Explorer : MonoBehaviour
         if (stamina >= restartThreshold)
         {
             isResting = false;
+
+            staminaRecoveryPerSecond -= recoveryDecay;
+            staminaRecoveryPerSecond = Mathf.Max(0f, staminaRecoveryPerSecond);
         }
     }
 

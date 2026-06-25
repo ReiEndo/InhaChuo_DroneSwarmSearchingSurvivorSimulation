@@ -10,9 +10,29 @@ public class ScriptsControl : MonoBehaviour
 
     private void Start()
     {
+        bool batchAutoStartEnabled = false;
+        foreach (var batchRunner in FindObjectsByType<DroneMissionBatchRunner>(FindObjectsSortMode.None))
+        {
+            if (batchRunner != null && batchRunner.AutoStartOnPlay)
+            {
+                batchAutoStartEnabled = true;
+                break;
+            }
+        }
+
         terrainGenerator.GenerateTerrain();
-        forestSpawner.SpawnTrees();
+        if (!batchAutoStartEnabled)
+        {
+            forestSpawner.SpawnTrees();
+        }
+
         explorer.ExplorerSpawner();
+
+        if (batchAutoStartEnabled)
+        {
+            return;
+        }
+
         droneSwarmDemoBootstrap.ResetDemo();
         uiScriptsControl.UI_Start();
     }

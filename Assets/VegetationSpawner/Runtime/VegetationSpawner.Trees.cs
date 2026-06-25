@@ -121,12 +121,9 @@ namespace sc.terrain.vegetationspawner
             List<TreeInstance> treeInstanceCollection = new List<TreeInstance>(terrain.terrainData.treeInstances);
 
             //Clear all existing instances first, setting the tree instances is additive
-            for (int i = 0; i < treeInstanceCollection.Count; i++)
+            foreach (TreePrefab prefab in item.prefabs)
             {
-                foreach (TreePrefab prefab in item.prefabs)
-                {
-                    treeInstanceCollection.RemoveAll(x => x.prototypeIndex == prefab.index);
-                }
+                treeInstanceCollection.RemoveAll(x => x.prototypeIndex == prefab.index);
             }
 
             if (item.enabled)
