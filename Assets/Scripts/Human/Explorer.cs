@@ -25,7 +25,7 @@ public class Explorer : MonoBehaviour
     public float obstacleAvoidAngle = 55f;      //回避時に左右へ曲がる角度
     private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
     public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
-    [SerializeField] private int maxTargetSearchAttemptsPerFrame = 32;
+    //[SerializeField] private int maxTargetSearchAttemptsPerFrame = 32;
     [SerializeField] private int fallbackTargetSearchAttempts = 96;
     [SerializeField] private float fallbackMinTargetDistance = 3f;
 
@@ -137,13 +137,13 @@ public class Explorer : MonoBehaviour
             return;
         }
 
-        if (!hasTarget && !TryFindUnknownTarget())
+        while (!hasTarget)
         {
-            StopRestAnimation();
-            SetIdleAnimation();
+            TryFindUnknownTarget();
             return;
         }
 
+        StopRestAnimation();
         MoveToTarget();
     }
 
@@ -344,109 +344,104 @@ public class Explorer : MonoBehaviour
         isAvoiding = true;
     }
 
-    bool TryFindUnknownTarget() //目標地点決定
+    void TryFindUnknownTarget() //目標地点決定
     {
         Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
         if (targetTerrain == null)
         {
             LogTargetSearchFailure(0, 0, 0, 0, "no terrain");
-            return false;
+            return;
         }
 
         terrain = targetTerrain;
-        int attempts = Mathf.Max(1, maxTargetSearchAttemptsPerFrame);
+        //int attempts = Mathf.Max(1, maxTargetSearchAttemptsPerFrame);
         int outsideTerrainCount = 0;
         int obstacleBlockedCount = 0;
         int slopeBlockedCount = 0;
         float centerSteerWeight = GetCenterSteerWeight(targetTerrain);
         Vector3 centerDirection = GetTerrainCenterDirection(targetTerrain);
 
-        for (int attempt = 0; attempt < attempts; attempt++)
+    
+        float angle = Random.Range(-60f, 60f);
+        Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
+        dir.y = 0f;
+
+        if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
         {
-            float angle = Random.Range(-60f, 60f);
-            Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
-            dir.y = 0f;
-
-            if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
-            {
-                dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
-            }
-
-            float distance = Random.Range(minTargetDistance, scanRadius);
-
-            Vector3 target = transform.position + dir * distance;
-
-            target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
-
-            if (!IsInsideTerrain(target))
-            {
-                outsideTerrainCount++;
-                continue;
-            }
-
-            if (!IsValidPoint(target))
-            {
-                obstacleBlockedCount++;
-                continue;
-            }
-
-            if (CrossBlockedSlope(transform.position, target))
-            {
-                slopeBlockedCount++;
-                continue;
-            }
-
-            hasTarget = true;
-            targetPosition = target;
-            lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
-            stuckTimer = 0f;
-            return true;
+            dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
         }
 
-        int fallbackAttempts = Mathf.Max(0, fallbackTargetSearchAttempts);
-        for (int attempt = 0; attempt < fallbackAttempts; attempt++)
+        float distance = Random.Range(minTargetDistance, scanRadius);
+
+        Vector3 target = transform.position + dir * distance;
+
+        target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
+
+        if (!IsInsideTerrain(target))
         {
-            float angle = Random.Range(0f, 360f);
-            Vector3 dir = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
-
-            if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
-            {
-                dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
-            }
-
-            float minDistance = Mathf.Clamp(fallbackMinTargetDistance, 0.5f, scanRadius);
-            float distance = Random.Range(minDistance, scanRadius);
-            Vector3 target = transform.position + dir * distance;
-
-            target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
-
-            if (!IsInsideTerrain(target))
-            {
-                outsideTerrainCount++;
-                continue;
-            }
-
-            if (!IsValidPoint(target))
-            {
-                obstacleBlockedCount++;
-                continue;
-            }
-
-            if (CrossBlockedSlope(transform.position, target))
-            {
-                slopeBlockedCount++;
-                continue;
-            }
-
-            hasTarget = true;
-            targetPosition = target;
-            lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
-            stuckTimer = 0f;
-            return true;
+            outsideTerrainCount++;
+            return;
         }
 
-        LogTargetSearchFailure(attempts + fallbackAttempts, outsideTerrainCount, obstacleBlockedCount, slopeBlockedCount);
-        return false;
+        if (!IsValidPoint(target))
+        {
+            obstacleBlockedCount++;
+            return;
+        }
+
+        if (CrossBlockedSlope(transform.position, target))
+        {
+            slopeBlockedCount++;
+            return;
+        }
+
+        hasTarget = true;
+        targetPosition = target;
+        lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
+        stuckTimer = 0f;
+        return;
+        
+
+
+        angle = Random.Range(0f, 360f);
+        dir = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
+
+        if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
+        {
+            dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
+        }
+
+        float minDistance = Mathf.Clamp(fallbackMinTargetDistance, 0.5f, scanRadius);
+        distance = Random.Range(minDistance, scanRadius);
+        target = transform.position + dir * distance;
+
+        target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
+
+        if (!IsInsideTerrain(target))
+        {
+            outsideTerrainCount++;
+            return;
+        }
+
+        if (!IsValidPoint(target))
+        {
+            obstacleBlockedCount++;
+            return;
+        }
+
+        if (CrossBlockedSlope(transform.position, target))
+        {
+            slopeBlockedCount++;
+            return;
+        }
+
+        hasTarget = true;
+        targetPosition = target;
+        lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
+        stuckTimer = 0f;
+        return;
+
+        //LogTargetSearchFailure(attempts + fallbackAttempts, outsideTerrainCount, obstacleBlockedCount, slopeBlockedCount);
     }
 
     float GetCenterSteerWeight(Terrain targetTerrain)
