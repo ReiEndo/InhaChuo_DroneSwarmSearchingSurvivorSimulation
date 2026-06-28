@@ -3,6 +3,7 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class Explorer : MonoBehaviour
 {
+    private Animator animator;
     private CharacterController controller;//移動方法にCharacterController.Moveを採用
 
     [Header("Terrain")]
@@ -79,14 +80,9 @@ public class Explorer : MonoBehaviour
     }
     */
 
-    [SerializeField] private Animator animator;
-
     public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
     {
-        if (animator == null)
-        {
-            animator = GetComponentInChildren<Animator>();
-        }
+        animator = GetComponent<Animator>();
 
         controller = GetComponent<CharacterController>();
 
