@@ -2,14 +2,33 @@ using UnityEngine;
 
 public class ScriptsControl : MonoBehaviour
 {
+    [Header("Main Scripts")]
     public TerrainGenerator terrainGenerator;
     public ForestSpawner forestSpawner;
     public DroneSwarmDemoBootstrap droneSwarmDemoBootstrap;
     public Explorer explorer;
     public UiScriptsControl uiScriptsControl;
 
+    [Header("Start Setting")]
+    [SerializeField] public bool autoStart = false;
+
+    private bool started;
+
     private void Start()
     {
+        if (autoStart)
+        {
+            StartSimulation();
+        }
+    }
+    public void StartSimulation()
+    {
+        if (started)
+        {
+            return;
+        }
+        started = true;
+
         bool batchAutoStartEnabled = false;
         foreach (var batchRunner in FindObjectsByType<DroneMissionBatchRunner>(FindObjectsSortMode.None))
         {
