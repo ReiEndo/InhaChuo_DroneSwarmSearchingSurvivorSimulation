@@ -140,7 +140,6 @@ public class Explorer : MonoBehaviour
         while (!hasTarget)
         {
             TryFindUnknownTarget();
-            return;
         }
 
         StopRestAnimation();
