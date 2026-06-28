@@ -1,19 +1,10 @@
 using UnityEngine;
-using UnityEngine.Animations;
-using UnityEngine.Playables;
-#if UNITY_EDITOR
-using UnityEditor;
-#endif
 
 [RequireComponent(typeof(CharacterController))]
 public class Explorer : MonoBehaviour
 {
     private Animator animator;
     private CharacterController controller;//移動方法にCharacterController.Moveを採用
-    private PlayableGraph restAnimationGraph;
-    private AnimationClipPlayable restAnimationPlayable;
-    private bool restAnimationPlaying;
-    private float restAnimationStartedAt;
 
     [Header("Terrain")]
     public Terrain terrain;
@@ -48,7 +39,6 @@ public class Explorer : MonoBehaviour
     public float staminaRecoveryPerSecond = 7f;     //体力回復速度
     public float recoveryDecay = 0.2f;              //疲労
     public float restartThreshold = 50f;  //休憩→移動への体力必要値
-    [SerializeField] private AnimationClip takingRestClip;
     private bool isResting = false;  //true:移動 false:休憩
 
     [Header("スタック判定")]
@@ -93,9 +83,6 @@ public class Explorer : MonoBehaviour
     public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
     {
         animator = GetComponent<Animator>();
-#if UNITY_EDITOR
-        takingRestClip ??= LoadTakingRestClip();
-#endif
 
         controller = GetComponent<CharacterController>();
 
@@ -137,11 +124,6 @@ public class Explorer : MonoBehaviour
         MoveToTarget();
     }
 
-    private void OnDestroy()
-    {
-        StopRestAnimation();
-    }
-
     public bool IsStoppedAfterDroneFound => stoppedAfterDroneFound;
 
     public void StopAfterFoundByDrone()
@@ -149,7 +131,6 @@ public class Explorer : MonoBehaviour
         stoppedAfterDroneFound = true;
         hasTarget = false;
         isResting = false;
-        StopRestAnimation();
         isAvoiding = false;
         avoidTimer = 0f;
         verticalVelocity = 0f;
@@ -437,16 +418,15 @@ public class Explorer : MonoBehaviour
 
     void RecoverStamina()
     {
-        PlayRestAnimation();
-
         stamina += staminaRecoveryPerSecond * Time.deltaTime;
 
         stamina = Mathf.Clamp(stamina, 0f, 100f);
 
+        SetIdleAnimation();
+
         if (stamina >= restartThreshold)
         {
             isResting = false;
-            StopRestAnimation();
 
             staminaRecoveryPerSecond -= recoveryDecay;
             staminaRecoveryPerSecond = Mathf.Max(0f, staminaRecoveryPerSecond);
@@ -481,7 +461,7 @@ public class Explorer : MonoBehaviour
                 isResting = true;
                 hasTarget = false;
 
-                PlayRestAnimation();
+                SetIdleAnimation();
 
                 return;
             }
@@ -574,8 +554,6 @@ public class Explorer : MonoBehaviour
 
     private void SetIdleAnimation()
     {
-        StopRestAnimation();
-
         if (animator == null)
         {
             return;
@@ -584,61 +562,6 @@ public class Explorer : MonoBehaviour
         animator.SetFloat("Speed", 0f);
         animator.SetFloat("MotionSpeed", 0f);
     }
-
-    private void PlayRestAnimation()
-    {
-        if (animator == null || takingRestClip == null)
-        {
-            SetIdleAnimation();
-            return;
-        }
-
-        if (!restAnimationPlaying)
-        {
-            restAnimationGraph = PlayableGraph.Create($"{name} TakingRest");
-            restAnimationGraph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
-            restAnimationPlayable = AnimationClipPlayable.Create(restAnimationGraph, takingRestClip);
-            restAnimationPlayable.SetApplyFootIK(false);
-            restAnimationPlayable.SetSpeed(0.0);
-
-            var output = AnimationPlayableOutput.Create(restAnimationGraph, "TakingRest", animator);
-            output.SetSourcePlayable(restAnimationPlayable);
-            restAnimationGraph.Play();
-            restAnimationPlaying = true;
-            restAnimationStartedAt = Time.time;
-        }
-
-        if (restAnimationPlayable.IsValid() && takingRestClip.length > 0f)
-        {
-            restAnimationPlayable.SetTime((Time.time - restAnimationStartedAt) % takingRestClip.length);
-        }
-    }
-
-    private void StopRestAnimation()
-    {
-        if (restAnimationGraph.IsValid())
-        {
-            restAnimationGraph.Destroy();
-        }
-
-        restAnimationPlaying = false;
-    }
-
-#if UNITY_EDITOR
-    private static AnimationClip LoadTakingRestClip()
-    {
-        const string path = "Assets/timmyColoredMoving.fbx";
-        foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
-        {
-            if (asset is AnimationClip clip && clip.name == "TakingRest")
-            {
-                return clip;
-            }
-        }
-
-        return null;
-    }
-#endif
 
     /*Explorer初期位置テレポート*/
     public void TeleportToRandomInitialPosition()
