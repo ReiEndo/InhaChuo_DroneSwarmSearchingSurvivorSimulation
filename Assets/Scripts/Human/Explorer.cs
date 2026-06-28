@@ -1,4 +1,9 @@
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 [RequireComponent(typeof(CharacterController))]
 public class Explorer : MonoBehaviour
@@ -45,6 +50,10 @@ public class Explorer : MonoBehaviour
     public float recoveryDecay = 0.2f;              //疲労
     public float restartThreshold = 50f;  //休憩→移動への体力必要値
     private bool isResting = false;  //true:移動 false:休憩
+    [SerializeField] private AnimationClip takingRestClip;
+    [SerializeField] private string takingRestClipName = "TakingRest";
+    private PlayableGraph restAnimationGraph;
+    private AnimationClipPlayable restAnimationPlayable;
 
     [Header("スタック判定")]
     private float lastDistanceToTarget;
@@ -93,6 +102,7 @@ public class Explorer : MonoBehaviour
         {
             animator = GetComponentInChildren<Animator>();
         }
+        ResolveTakingRestClip();
 
         controller = GetComponent<CharacterController>();
 
@@ -106,6 +116,7 @@ public class Explorer : MonoBehaviour
     {
         if (stoppedAfterDroneFound)
         {
+            StopRestAnimation();
             SetIdleAnimation();
             return;
         }
@@ -121,12 +132,14 @@ public class Explorer : MonoBehaviour
 
         if (isResting)
         {
+            PlayRestAnimation();
             RecoverStamina();
             return;
         }
 
         if (!hasTarget && !TryFindUnknownTarget())
         {
+            StopRestAnimation();
             SetIdleAnimation();
             return;
         }
@@ -145,6 +158,7 @@ public class Explorer : MonoBehaviour
         avoidTimer = 0f;
         verticalVelocity = 0f;
         lastDistanceToTarget = 0f;
+        StopRestAnimation();
         SetIdleAnimation();
     }
 
@@ -574,6 +588,7 @@ public class Explorer : MonoBehaviour
         if (stamina >= restartThreshold)
         {
             isResting = false;
+            StopRestAnimation();
 
             staminaRecoveryPerSecond -= recoveryDecay;
             staminaRecoveryPerSecond = Mathf.Max(0f, staminaRecoveryPerSecond);
@@ -583,6 +598,8 @@ public class Explorer : MonoBehaviour
     //改善の必要あり
     void MoveToTarget(bool consumeStamina = true)
     {
+        StopRestAnimation();
+
         if (!hasTarget)
         {
             return;
@@ -762,6 +779,7 @@ public class Explorer : MonoBehaviour
             avoidTimer = 0f;
             verticalVelocity = 0f;
             lastDistanceToTarget = 0f;
+            StopRestAnimation();
 
             Debug.Log("Explorer position set: " + candidatePosition);
 
@@ -804,5 +822,78 @@ public class Explorer : MonoBehaviour
         float slope = Vector3.Angle(normal, Vector3.up);
 
         return slope <= initialMaxSlope;
+    }
+
+    void PlayRestAnimation()
+    {
+        if (animator == null || takingRestClip == null)
+        {
+            SetIdleAnimation();
+            return;
+        }
+
+        if (restAnimationGraph.IsValid())
+        {
+            if (restAnimationPlayable.IsValid() && takingRestClip.length > 0f)
+            {
+                double time = restAnimationPlayable.GetTime();
+                if (time >= takingRestClip.length)
+                {
+                    restAnimationPlayable.SetTime(time % takingRestClip.length);
+                    restAnimationPlayable.SetDone(false);
+                }
+            }
+            return;
+        }
+
+        restAnimationGraph = PlayableGraph.Create($"{name} TakingRest");
+        restAnimationGraph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
+        restAnimationPlayable = AnimationClipPlayable.Create(restAnimationGraph, takingRestClip);
+        restAnimationPlayable.SetApplyFootIK(false);
+
+        var output = AnimationPlayableOutput.Create(restAnimationGraph, "TakingRest", animator);
+        output.SetSourcePlayable(restAnimationPlayable);
+        restAnimationGraph.Play();
+    }
+
+    void StopRestAnimation()
+    {
+        if (restAnimationGraph.IsValid())
+        {
+            restAnimationGraph.Destroy();
+        }
+    }
+
+    void OnDisable()
+    {
+        StopRestAnimation();
+    }
+
+    void OnDestroy()
+    {
+        StopRestAnimation();
+    }
+
+    void ResolveTakingRestClip()
+    {
+        if (takingRestClip != null)
+        {
+            return;
+        }
+
+#if UNITY_EDITOR
+        foreach (string guid in AssetDatabase.FindAssets($"{takingRestClipName} t:AnimationClip"))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
+            {
+                if (asset is AnimationClip clip && clip.name == takingRestClipName)
+                {
+                    takingRestClip = clip;
+                    return;
+                }
+            }
+        }
+#endif
     }
 }
