@@ -115,10 +115,6 @@ public sealed class DroneDemoSwarmSpawner
                 visual.transform.localScale = Vector3.one * Mathf.Max(0.35f, motor.DroneRadius * 1.8f);
                 DroneDemoVisualUtility.SetRendererColor(visual, Color.Lerp(new Color(0.1f, 0.5f, 1f), new Color(0.1f, 1f, 0.65f), i / Mathf.Max(1f, count - 1f)));
             }
-            else
-            {
-                DroneEmbeddedAnimationPlayer.TryAttach(drone, visual, droneModelPrefab);
-            }
         }
     }
 

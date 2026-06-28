@@ -9,8 +9,6 @@ using UnityEngine.UI;
 
 public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 {
-    private const string c_DefaultDroneModelPath = "Assets/Drone.fbx";
-    private const string c_AnimatedDroneModelPath = "Assets/drone_ver2_moving.fbx";
     private const int c_ObstacleLayer = 7;
     private const int c_TargetLayer = 4;
     private const int c_NonSensedLayer = 2;
@@ -196,7 +194,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         droneSpeed = Mathf.Max(0f, droneSpeed);
         telemetryTimeoutSeconds = Mathf.Max(0f, telemetryTimeoutSeconds);
 #if UNITY_EDITOR
-        droneModelPrefab = ResolveEditorDroneModelPrefab(droneModelPrefab);
+        droneModelPrefab ??= AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Drone.fbx");
 #endif
     }
 
@@ -578,49 +576,10 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private GameObject ResolveDroneModelPrefab()
     {
 #if UNITY_EDITOR
-        droneModelPrefab = ResolveEditorDroneModelPrefab(droneModelPrefab);
+        droneModelPrefab ??= AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Drone.fbx");
 #endif
         return droneModelPrefab;
     }
-
-#if UNITY_EDITOR
-    private static GameObject ResolveEditorDroneModelPrefab(GameObject currentPrefab)
-    {
-        if (currentPrefab != null && HasEmbeddedAnimationClips(currentPrefab))
-        {
-            return currentPrefab;
-        }
-
-        var animatedPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(c_AnimatedDroneModelPath);
-        if (animatedPrefab != null)
-        {
-            return animatedPrefab;
-        }
-
-        return currentPrefab != null
-            ? currentPrefab
-            : AssetDatabase.LoadAssetAtPath<GameObject>(c_DefaultDroneModelPath);
-    }
-
-    private static bool HasEmbeddedAnimationClips(GameObject prefab)
-    {
-        string path = AssetDatabase.GetAssetPath(prefab);
-        if (string.IsNullOrEmpty(path))
-        {
-            return false;
-        }
-
-        foreach (Object asset in AssetDatabase.LoadAllAssetRepresentationsAtPath(path))
-        {
-            if (asset is AnimationClip clip && clip != null && !clip.empty)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-#endif
 
     private void HandleDroneTargetSensed(DroneGridSensor sensor, DroneNative.DroneVec3i cell)
     {
