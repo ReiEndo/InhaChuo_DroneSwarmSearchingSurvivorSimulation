@@ -125,6 +125,7 @@ public sealed class DroneDemoSwarmSpawner
         {
             visual = UnityEngine.Object.Instantiate(droneModelPrefab);
             visual.name = "Drone Model";
+            visual.AddComponent<DroneModelAnimationPlayer>().Configure(droneModelPrefab);
         }
         else
         {
