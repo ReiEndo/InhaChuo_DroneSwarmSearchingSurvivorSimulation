@@ -107,7 +107,7 @@ public class DroneCameraFeed : MonoBehaviour
             droneCamera.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
 
             droneCamera.fieldOfView = fieldOfView;
-            droneCamera.farClipPlane = 1000f;
+            droneCamera.farClipPlane = Mathf.Max(droneCamera.nearClipPlane + 0.01f, cameraHeight + Mathf.Max(0f, extraFarClipDistance));
         }
         else
         {
