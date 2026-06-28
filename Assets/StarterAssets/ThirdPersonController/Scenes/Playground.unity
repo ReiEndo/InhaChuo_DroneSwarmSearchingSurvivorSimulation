@@ -1695,6 +1695,11 @@ Transform:
   m_CorrespondingSourceObject: {fileID: -8679921383154817045, guid: 6b55529f2074749408c471256a4fefc5, type: 3}
   m_PrefabInstance: {fileID: 758068707}
   m_PrefabAsset: {fileID: 0}
+--- !u!95 &758068709 stripped
+Animator:
+  m_CorrespondingSourceObject: {fileID: 5866666021909216657, guid: 6b55529f2074749408c471256a4fefc5, type: 3}
+  m_PrefabInstance: {fileID: 758068707}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &762186889
 GameObject:
   m_ObjectHideFlags: 0
@@ -3878,6 +3883,10 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 9000000, guid: 6b55529f2074749408c471256a4fefc5, type: 3}
     - target: {fileID: 6982812146204527121, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
+      propertyPath: m_Enabled
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 6982812146204527121, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
       propertyPath: m_CullingMode
       value: 0
       objectReference: {fileID: 0}
@@ -3978,6 +3987,7 @@ MonoBehaviour:
   initialMaxSlope: 35
   droneAnnouncementInterval: 10
   droneHearingDistance: 10
+  animator: {fileID: 758068709}
 --- !u!1 &1764214107
 GameObject:
   m_ObjectHideFlags: 0
