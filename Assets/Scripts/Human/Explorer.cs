@@ -1,9 +1,13 @@
 using UnityEngine;
+using UnityEngine.Animations;
+using UnityEngine.Playables;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 [RequireComponent(typeof(CharacterController))]
 public class Explorer : MonoBehaviour
 {
-    private Animator animator;
     private CharacterController controller;//移動方法にCharacterController.Moveを採用
 
     [Header("Terrain")]
@@ -13,12 +17,17 @@ public class Explorer : MonoBehaviour
     public float scanRadius = 20f;  //目標地点最大範囲
     public float minTargetDistance = 10f;   //目標地点最小範囲
     public float moveSpeed = 3f;    //移動速度
+    [SerializeField] private float edgeCenterSteerDistance = 20f;
+    [Range(0f, 1f)]
+    [SerializeField] private float edgeCenterSteerStrength = 0.85f;
     public float obstacleCheckDistance = 1f;    //障害物検知距離
     public float obstacleAvoidDuration = 1.0f;  //回避方向を維持する時間
     public float obstacleAvoidAngle = 55f;      //回避時に左右へ曲がる角度
     private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
     public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
-    [SerializeField] private int maxTargetSearchAttemptsPerFrame = 32;
+    //[SerializeField] private int maxTargetSearchAttemptsPerFrame = 32;
+    [SerializeField] private int fallbackTargetSearchAttempts = 96;
+    [SerializeField] private float fallbackMinTargetDistance = 3f;
 
     private Vector3 targetPosition;     //目標地点
     private bool hasTarget = false;     //目標地点が定まっているか
@@ -27,6 +36,7 @@ public class Explorer : MonoBehaviour
     private bool stoppedAfterDroneFound; //ドローンに発見されたら停止
 
     private float verticalVelocity;     //重力用
+    private float nextTargetSearchFailureLogAt;
     
     public LayerMask obstacleMask;      //地面の障害物判定を除外
     private bool isAvoiding = false;    //回避開始時だけ回転するようフラッグ
@@ -40,6 +50,10 @@ public class Explorer : MonoBehaviour
     public float recoveryDecay = 0.2f;              //疲労
     public float restartThreshold = 50f;  //休憩→移動への体力必要値
     private bool isResting = false;  //true:移動 false:休憩
+    [SerializeField] private AnimationClip takingRestClip;
+    [SerializeField] private string takingRestClipName = "TakingRest";
+    private PlayableGraph restAnimationGraph;
+    private AnimationClipPlayable restAnimationPlayable;
 
     [Header("スタック判定")]
     private float lastDistanceToTarget;
@@ -80,9 +94,15 @@ public class Explorer : MonoBehaviour
     }
     */
 
+    [SerializeField] private Animator animator;
+
     public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
     {
-        animator = GetComponent<Animator>();
+        if (animator == null)
+        {
+            animator = GetComponentInChildren<Animator>();
+        }
+        ResolveTakingRestClip();
 
         controller = GetComponent<CharacterController>();
 
@@ -96,6 +116,7 @@ public class Explorer : MonoBehaviour
     {
         if (stoppedAfterDroneFound)
         {
+            StopRestAnimation();
             SetIdleAnimation();
             return;
         }
@@ -111,16 +132,17 @@ public class Explorer : MonoBehaviour
 
         if (isResting)
         {
+            PlayRestAnimation();
             RecoverStamina();
             return;
         }
 
-        if (!hasTarget && !TryFindUnknownTarget())
+        while (!hasTarget)
         {
-            SetIdleAnimation();
-            return;
+            TryFindUnknownTarget();
         }
 
+        StopRestAnimation();
         MoveToTarget();
     }
 
@@ -135,6 +157,7 @@ public class Explorer : MonoBehaviour
         avoidTimer = 0f;
         verticalVelocity = 0f;
         lastDistanceToTarget = 0f;
+        StopRestAnimation();
         SetIdleAnimation();
     }
 
@@ -320,37 +343,169 @@ public class Explorer : MonoBehaviour
         isAvoiding = true;
     }
 
-    bool TryFindUnknownTarget() //目標地点決定
+    void TryFindUnknownTarget() //目標地点決定
     {
         Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
         if (targetTerrain == null)
         {
-            return false;
+            LogTargetSearchFailure(0, 0, 0, 0, "no terrain");
+            return;
         }
 
         terrain = targetTerrain;
-        int attempts = Mathf.Max(1, maxTargetSearchAttemptsPerFrame);
-        for (int attempt = 0; attempt < attempts; attempt++)
+        //int attempts = Mathf.Max(1, maxTargetSearchAttemptsPerFrame);
+        int outsideTerrainCount = 0;
+        int obstacleBlockedCount = 0;
+        int slopeBlockedCount = 0;
+        float centerSteerWeight = GetCenterSteerWeight(targetTerrain);
+        Vector3 centerDirection = GetTerrainCenterDirection(targetTerrain);
+
+    
+        float angle = Random.Range(-60f, 60f);
+        Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
+        dir.y = 0f;
+
+        if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
         {
-            float angle = Random.Range(-60f, 60f);
-            Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
-            float distance = Random.Range(minTargetDistance, scanRadius);
-
-            Vector3 target = transform.position + dir * distance;
-
-            target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
-
-            if (IsInsideTerrain(target) && IsValidPoint(target) && !CrossBlockedSlope(transform.position, target))
-            {
-                hasTarget = true;
-                targetPosition = target;
-                lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
-                stuckTimer = 0f;
-                return true;
-            }
+            dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
         }
 
-        return false;
+        float distance = Random.Range(minTargetDistance, scanRadius);
+
+        Vector3 target = transform.position + dir * distance;
+
+        target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
+
+        if (!IsInsideTerrain(target))
+        {
+            outsideTerrainCount++;
+            return;
+        }
+
+        if (!IsValidPoint(target))
+        {
+            obstacleBlockedCount++;
+            return;
+        }
+
+        if (CrossBlockedSlope(transform.position, target))
+        {
+            slopeBlockedCount++;
+            return;
+        }
+
+        hasTarget = true;
+        targetPosition = target;
+        lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
+        stuckTimer = 0f;
+        return;
+        
+
+
+        angle = Random.Range(0f, 360f);
+        dir = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
+
+        if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
+        {
+            dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
+        }
+
+        float minDistance = Mathf.Clamp(fallbackMinTargetDistance, 0.5f, scanRadius);
+        distance = Random.Range(minDistance, scanRadius);
+        target = transform.position + dir * distance;
+
+        target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
+
+        if (!IsInsideTerrain(target))
+        {
+            outsideTerrainCount++;
+            return;
+        }
+
+        if (!IsValidPoint(target))
+        {
+            obstacleBlockedCount++;
+            return;
+        }
+
+        if (CrossBlockedSlope(transform.position, target))
+        {
+            slopeBlockedCount++;
+            return;
+        }
+
+        hasTarget = true;
+        targetPosition = target;
+        lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
+        stuckTimer = 0f;
+        return;
+
+        //LogTargetSearchFailure(attempts + fallbackAttempts, outsideTerrainCount, obstacleBlockedCount, slopeBlockedCount);
+    }
+
+    float GetCenterSteerWeight(Terrain targetTerrain)
+    {
+        if (targetTerrain == null || targetTerrain.terrainData == null || edgeCenterSteerDistance <= 0f)
+        {
+            return 0f;
+        }
+
+        Vector3 terrainPos = targetTerrain.transform.position;
+        Vector3 terrainSize = targetTerrain.terrainData.size;
+        float minX = terrainPos.x + terrainMargin;
+        float maxX = terrainPos.x + terrainSize.x - terrainMargin;
+        float minZ = terrainPos.z + terrainMargin;
+        float maxZ = terrainPos.z + terrainSize.z - terrainMargin;
+
+        float distanceToInnerEdge = Mathf.Min(
+            transform.position.x - minX,
+            maxX - transform.position.x,
+            transform.position.z - minZ,
+            maxZ - transform.position.z
+        );
+
+        float edgeWeight = Mathf.InverseLerp(edgeCenterSteerDistance, 0f, distanceToInnerEdge);
+        return Mathf.Clamp01(edgeWeight * edgeCenterSteerStrength);
+    }
+
+    Vector3 GetTerrainCenterDirection(Terrain targetTerrain)
+    {
+        if (targetTerrain == null || targetTerrain.terrainData == null)
+        {
+            return Vector3.zero;
+        }
+
+        Vector3 terrainPos = targetTerrain.transform.position;
+        Vector3 terrainSize = targetTerrain.terrainData.size;
+        Vector3 center = new Vector3(
+            terrainPos.x + terrainSize.x * 0.5f,
+            transform.position.y,
+            terrainPos.z + terrainSize.z * 0.5f
+        );
+
+        Vector3 direction = center - transform.position;
+        direction.y = 0f;
+        return direction.sqrMagnitude > 0.0001f ? direction.normalized : Vector3.zero;
+    }
+
+    void LogTargetSearchFailure(
+        int attempts,
+        int outsideTerrainCount,
+        int obstacleBlockedCount,
+        int slopeBlockedCount,
+        string reason = null
+    )
+    {
+        if (Time.time < nextTargetSearchFailureLogAt)
+        {
+            return;
+        }
+
+        nextTargetSearchFailureLogAt = Time.time + 1f;
+        string suffix = string.IsNullOrEmpty(reason) ? string.Empty : $", reason={reason}";
+        Debug.Log(
+            $"[Explorer Stop] target search failed: attempts={attempts}, outside={outsideTerrainCount}, obstacle={obstacleBlockedCount}, slope={slopeBlockedCount}{suffix}"
+        );
     }
 
     bool IsInsideTerrain(Vector3 point) //terrain範囲外への移動防止
@@ -427,6 +582,7 @@ public class Explorer : MonoBehaviour
         if (stamina >= restartThreshold)
         {
             isResting = false;
+            StopRestAnimation();
 
             staminaRecoveryPerSecond -= recoveryDecay;
             staminaRecoveryPerSecond = Mathf.Max(0f, staminaRecoveryPerSecond);
@@ -436,6 +592,8 @@ public class Explorer : MonoBehaviour
     //改善の必要あり
     void MoveToTarget(bool consumeStamina = true)
     {
+        StopRestAnimation();
+
         if (!hasTarget)
         {
             return;
@@ -443,6 +601,7 @@ public class Explorer : MonoBehaviour
 
         if (CrossBlockedSlope(transform.position, targetPosition))
         {
+            Debug.Log("[Explorer Stop] path blocked by slope");
             hasTarget = false;
             isAvoiding = false;
             avoidTimer = 0f;
@@ -457,6 +616,7 @@ public class Explorer : MonoBehaviour
 
             if (stamina <= 0f)
             {
+                Debug.Log("[Explorer Stop] stamina empty");
                 stamina = 0f;
                 isResting = true;
                 hasTarget = false;
@@ -487,6 +647,7 @@ public class Explorer : MonoBehaviour
 
             if (!IsInsideTerrain(nextPos))
             {
+                Debug.Log("[Explorer Stop] avoidance would leave terrain");
                 hasTarget = false;
                 isAvoiding = false;
                 avoidTimer = 0f;
@@ -612,6 +773,7 @@ public class Explorer : MonoBehaviour
             avoidTimer = 0f;
             verticalVelocity = 0f;
             lastDistanceToTarget = 0f;
+            StopRestAnimation();
 
             Debug.Log("Explorer position set: " + candidatePosition);
 
@@ -654,5 +816,78 @@ public class Explorer : MonoBehaviour
         float slope = Vector3.Angle(normal, Vector3.up);
 
         return slope <= initialMaxSlope;
+    }
+
+    void PlayRestAnimation()
+    {
+        if (animator == null || takingRestClip == null)
+        {
+            SetIdleAnimation();
+            return;
+        }
+
+        if (restAnimationGraph.IsValid())
+        {
+            if (restAnimationPlayable.IsValid() && takingRestClip.length > 0f)
+            {
+                double time = restAnimationPlayable.GetTime();
+                if (time >= takingRestClip.length)
+                {
+                    restAnimationPlayable.SetTime(time % takingRestClip.length);
+                    restAnimationPlayable.SetDone(false);
+                }
+            }
+            return;
+        }
+
+        restAnimationGraph = PlayableGraph.Create($"{name} TakingRest");
+        restAnimationGraph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
+        restAnimationPlayable = AnimationClipPlayable.Create(restAnimationGraph, takingRestClip);
+        restAnimationPlayable.SetApplyFootIK(false);
+
+        var output = AnimationPlayableOutput.Create(restAnimationGraph, "TakingRest", animator);
+        output.SetSourcePlayable(restAnimationPlayable);
+        restAnimationGraph.Play();
+    }
+
+    void StopRestAnimation()
+    {
+        if (restAnimationGraph.IsValid())
+        {
+            restAnimationGraph.Destroy();
+        }
+    }
+
+    void OnDisable()
+    {
+        StopRestAnimation();
+    }
+
+    void OnDestroy()
+    {
+        StopRestAnimation();
+    }
+
+    void ResolveTakingRestClip()
+    {
+        if (takingRestClip != null)
+        {
+            return;
+        }
+
+#if UNITY_EDITOR
+        foreach (string guid in AssetDatabase.FindAssets($"{takingRestClipName} t:AnimationClip"))
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
+            {
+                if (asset is AnimationClip clip && clip.name == takingRestClipName)
+                {
+                    takingRestClip = clip;
+                    return;
+                }
+            }
+        }
+#endif
     }
 }
