@@ -6,6 +6,7 @@ public class ScriptsControl : MonoBehaviour
     public ForestSpawner forestSpawner;
     public DroneSwarmDemoBootstrap droneSwarmDemoBootstrap;
     public Explorer explorer;
+    public UiScriptsControl uiScriptsControl;
 
     private void Start()
     {
@@ -33,5 +34,6 @@ public class ScriptsControl : MonoBehaviour
         }
 
         droneSwarmDemoBootstrap.ResetDemo();
+        uiScriptsControl.UI_Start();
     }
 }

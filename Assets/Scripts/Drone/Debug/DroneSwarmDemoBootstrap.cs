@@ -153,7 +153,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         BuildWorld();
         BuildSwarm();
         BuildDebugRenderer();
-        BuildUi();
+        //新たにUIを作成するためコメントアウト↓
+        //BuildUi();
 
         communicationHub.ResetCommunicationMemory();
         communicationHub.RefreshNodes();
@@ -239,7 +240,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         commandState = result.CommandState;
         commandRoutePlanner = result.CommandRoutePlanner;
         ApplyDroneSpeed();
-        BuildDroneCameras();
+        //UI新規作成のためコメントアウト↓
+        //BuildDroneCameras();
     }
 
     private void BuildDebugRenderer()
@@ -721,10 +723,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             telemetryRecorder.RecordDroneInformed(state.DroneId, report.Cell, state.TargetInformedDroneCount);
         }
 
-        if (AllExplorersKnowTargetFound() && TryGetEarliestKnownTargetReport(out var earliestReport))
+        int bestInformedCount = CountBestKnownTargetInformedDrones();
+        if (bestInformedCount >= droneCount && TryGetEarliestKnownTargetReport(out var earliestReport))
         {
             telemetryRecorder.RecordAllDronesInformed(
-                CountBestKnownTargetInformedDrones(),
+                bestInformedCount,
                 earliestReport.Cell);
         }
     }
@@ -896,13 +899,14 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             return;
         }
 
-        if (!AllExplorersKnowTargetFound())
+        if (!TryGetFirstTargetFinder(out var firstFinderState, out var firstReport)
+            || !firstFinderState.AllExpectedDronesTargetInformed)
         {
             return;
         }
 
-        if (!TryGetFirstTargetFinderState(out var firstFinderState)
-            || !firstFinderState.AllExpectedDronesTargetInformed)
+        if (!AllExplorersKnowTargetFound()
+            || !AllExplorersReturnedNearTarget(firstFinderState, firstReport))
         {
             return;
         }
@@ -990,10 +994,60 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         return found;
     }
 
-    private bool TryGetFirstTargetFinderState(out DroneSwarmAgentState firstFinderState)
+    private bool AllExplorersReturnedNearTarget(DroneSwarmAgentState firstFinderState, DroneTargetReport firstReport)
+    {
+        if (firstFinderState == null || world == null)
+        {
+            return false;
+        }
+
+        float returnRadius = GetMissionReturnRadius();
+        Vector3 firstFinderPosition = firstFinderState.transform.position;
+        Vector3 targetAnchorPosition = world.GridToWorld(firstReport.Cell, firstFinderPosition.y);
+
+        foreach (var explorer in explorers)
+        {
+            if (explorer == null
+                || !explorer.TryGetComponent<DroneSwarmAgentState>(out var state)
+                || !state.KnowsTargetFound)
+            {
+                return false;
+            }
+
+            Vector3 explorerPosition = explorer.transform.position;
+            if (IsNearOnXZ(explorerPosition, targetAnchorPosition, returnRadius)
+                || IsNearOnXZ(explorerPosition, firstFinderPosition, returnRadius)
+                || (explorer.HasTargetAnchorCell && explorer.IsNearTargetAnchor(returnRadius)))
+            {
+                continue;
+            }
+
+            return false;
+        }
+
+        return explorers.Count > 0;
+    }
+
+    private float GetMissionReturnRadius()
+    {
+        float minimumCellRadius = world != null
+            ? world.CellSize * 1.5f
+            : cellSize * 1.5f;
+        return Mathf.Max(minimumCellRadius, communicationRadius);
+    }
+
+    private static bool IsNearOnXZ(Vector3 left, Vector3 right, float radius)
+    {
+        float clampedRadius = Mathf.Max(0f, radius);
+        float dx = left.x - right.x;
+        float dz = left.z - right.z;
+        return dx * dx + dz * dz <= clampedRadius * clampedRadius;
+    }
+
+    private bool TryGetFirstTargetFinder(out DroneSwarmAgentState firstFinderState, out DroneTargetReport firstReport)
     {
         firstFinderState = null;
-        DroneTargetReport firstReport = default;
+        firstReport = default;
         bool found = false;
 
         foreach (var explorer in explorers)
