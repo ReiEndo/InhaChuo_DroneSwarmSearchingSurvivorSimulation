@@ -40,6 +40,17 @@ public class ScriptsControl : MonoBehaviour
         }
 
         terrainGenerator.GenerateTerrain();
+
+        if (droneSwarmDemoBootstrap != null &&
+        terrainGenerator != null &&
+        terrainGenerator.terrain != null)
+        {
+            droneSwarmDemoBootstrap.ConfigureGridFromTerrain(
+                terrainGenerator.terrain,
+                droneSwarmDemoBootstrap.CellSize
+            );
+        }
+
         if (!batchAutoStartEnabled)
         {
             forestSpawner.SpawnTrees();

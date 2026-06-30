@@ -23,7 +23,9 @@ public class GameFlowController : MonoBehaviour
     [SerializeField] private ScriptsControl scriptsControl;
 
     [Header("Roots")]
+    [SerializeField] private GameObject startRoot;
     [SerializeField] private GameObject gameRoot;
+    [SerializeField] private GameObject resultRoot;
 
     [Header("Time Limits")]
     [SerializeField] private bool useSearchTimeLimit = true;
@@ -43,6 +45,9 @@ public class GameFlowController : MonoBehaviour
     [SerializeField] private Camera resultOverviewCamera;
     [SerializeField] private RenderTexture resultOverviewTexture;
 
+    [Header("Start Settings")]
+    [SerializeField] private StartSettingsController startSettingsController;
+
     private float gameStartTime;
     private float foundTime = -1f;
     private float droneReturnTime = -1f;
@@ -57,7 +62,7 @@ public class GameFlowController : MonoBehaviour
     {
         if (scriptsControl != null && scriptsControl.autoStart)
         {
-            StartGame();
+            OnClickStart();
         }
         else
         {
@@ -67,6 +72,10 @@ public class GameFlowController : MonoBehaviour
 
     public void OnClickStart()
     {
+        if(startSettingsController != null)
+        {
+            startSettingsController.ApplySettings();
+        }
         StartGame();
 
         if (scriptsControl != null)
@@ -211,14 +220,27 @@ public class GameFlowController : MonoBehaviour
 
     private void ShowStartScreen()
     {
+        if (startRoot != null)
+        {
+            startRoot.SetActive(true);
+        }
         if (gameRoot != null)
         {
             gameRoot.SetActive(false);
+        }
+        if (resultRoot != null)
+        {
+            resultRoot.SetActive(false);
         }
 
         if (startScreen != null)
         {
             startScreen.SetActive(true);
+        }
+
+        if (startSettingsController  != null)
+        {
+            startSettingsController.StartSettings_Start();
         }
 
         if (gameScreen != null)
@@ -239,9 +261,17 @@ public class GameFlowController : MonoBehaviour
 
     private void ShowGameScreen()
     {
+        if (startRoot  == null)
+        {
+            startRoot.SetActive(false);
+        }
         if (gameRoot != null)
         {
             gameRoot.SetActive(true);
+        }
+        if (resultRoot != null)
+        {
+            resultRoot.SetActive(false);
         }
 
         if (startScreen != null)
@@ -267,6 +297,15 @@ public class GameFlowController : MonoBehaviour
 
     private void ShowResultScreen()
     {
+        if (startRoot != null)
+        {
+            startRoot.SetActive(false);
+        }
+        if (resultRoot != null)
+        {
+            resultRoot.SetActive(true);
+        }
+
         if (startScreen != null)
         {
             startScreen.SetActive(false);

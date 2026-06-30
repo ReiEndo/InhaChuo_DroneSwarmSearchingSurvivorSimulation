@@ -6,6 +6,7 @@ using UnityEditor;
 #endif
 using UnityEngine;
 using UnityEngine.UI;
+using System.Runtime.InteropServices;
 
 public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 {
@@ -1073,4 +1074,59 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
         spawnedObjects.Clear();
     }
+
+    //0630追加分
+    /* StartSetting画面の参照用 */
+    public int GridWidth => width;
+    public int GridDepth => depth;
+    public float CellSize => cellSize;
+    public int DroneCount => droneCount;
+    public int SensorRadius => sensorRadius;
+    public float CommunicationRadius => communicationRadius;
+    public float DroneSpeed => droneSpeed;
+    /* 外部入力用 */
+    public void ConfigureStartSettings(
+    int newDroneCount,
+    float newCommunicationRadius,
+    float newDroneSpeed,
+    int newSensorRadius,
+    float newCellSize
+    )
+    {
+        droneCount = Mathf.Clamp(newDroneCount, 1, 12);
+        droneSpeed = Mathf.Max(0f, newDroneSpeed);
+        communicationRadius = Mathf.Max(0f, newCommunicationRadius);
+        sensorRadius = Mathf.Clamp(newSensorRadius, 1, 8);
+        cellSize = Mathf.Max(1f, newCellSize);
+    }
+    public void ConfigureGridFromTerrain(
+    Terrain terrain,
+    float newCellSize,
+    int maxGridWidth = 256,
+    int maxGridDepth = 256
+    )
+    {
+        if (terrain == null || terrain.terrainData == null)
+        {
+            Debug.LogWarning("Terrain が未設定のため、Drone Grid を自動設定できません。");
+            return;
+        }
+
+        cellSize = Mathf.Max(0.25f, newCellSize);
+
+        Vector3 size = terrain.terrainData.size;
+
+        width = Mathf.Clamp(
+            Mathf.RoundToInt(size.x / cellSize),
+            4,
+            maxGridWidth
+        );
+
+        depth = Mathf.Clamp(
+            Mathf.RoundToInt(size.z / cellSize),
+            4,
+            maxGridDepth
+        );
+    }
 }
+
