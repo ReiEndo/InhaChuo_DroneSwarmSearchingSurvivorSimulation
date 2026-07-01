@@ -40,10 +40,13 @@ public class GameFlowController : MonoBehaviour
     [SerializeField] private TextMeshProUGUI totalTimeText;
     [SerializeField] private TextMeshProUGUI resultTitleText;
 
-    [Header("Future Result Preview")]
+    [Header("Result Preview")]
     [SerializeField] private RawImage resultPreviewImage;
     [SerializeField] private Camera resultOverviewCamera;
     [SerializeField] private RenderTexture resultOverviewTexture;
+
+    [Header("Result Camera Hidden Layers")]
+    [SerializeField] private string[] resultHiddenLayerNames = { "GridWorld", "Marker" };
 
     [Header("Start Settings")]
     [SerializeField] private StartSettingsController startSettingsController;
@@ -86,6 +89,7 @@ public class GameFlowController : MonoBehaviour
 
     private void StartGame()
     {
+        DroneMissionEndReporter.ResetMissionState();
         gameStartTime = Time.time;
         foundTime = -1f;
         droneReturnTime = -1f;
@@ -105,55 +109,79 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
+        // 重要：
+        // TimeLimit判定より先に、Drone側の発見情報をGameFlowControllerへ同期する
+        TrySyncFoundTimeFromDroneReports();
+
         float elapsed = Time.time - gameStartTime;
 
-        // まだ発見していないまま探索制限時間を超えた場合
-        if (useSearchTimeLimit && foundTime < 0f && elapsed >= searchTimeLimitSeconds)
+        // まだ本当に発見していない場合だけSearchTimeLimitを見る
+        if (foundTime < 0f)
         {
-            ForceEndSearchFailed();
+            if (useSearchTimeLimit && elapsed >= searchTimeLimitSeconds)
+            {
+                droneReturnTime = -1f;
+                EndGame(GameEndReason.SearchTimeout);
+            }
+
             return;
         }
 
-        // 発見後、回収制限時間を超えた場合
-        if (useDroneReturnTimeLimit && foundTime >= 0f)
+        // ここに来た時点で遭難者は発見済み
+        // SearchTimeLimitはもう見ない
+        if (useDroneReturnTimeLimit)
         {
             float elapsedAfterFound = elapsed - foundTime;
 
             if (elapsedAfterFound >= droneReturnTimeLimitSeconds)
             {
                 ForceEndDroneReturnFailed();
-                return;
             }
         }
     }
 
-    public void NotifyExplorerFound()//遭難者発見時、このメソッドを実行する
+    public void NotifyExplorerFound()
     {
         if (!gameRunning || resultShown)
         {
             return;
         }
 
-        if (foundTime < 0f)
+        if (foundTime >= 0f)
         {
+            return;
+        }
+
+        // まずDrone側のTargetReportから正確な発見時刻を取る
+        if (!TrySyncFoundTimeFromDroneReports())
+        {
+            // TargetReportがまだ取れない場合だけ現在時刻を使う
             foundTime = Time.time - gameStartTime;
         }
     }
-
-    public void NotifyAllDronesReturned()//ドローン全機集合時、このメソッドを実行する
+    //ドローン全機集合時、このメソッドを実行する
+    public void NotifyAllDronesReturned()
     {
         if (!gameRunning || resultShown)
         {
             return;
         }
 
+        float elapsed = Time.time - gameStartTime;
+
+        // 成功前にも念のため発見時刻を同期する
         if (foundTime < 0f)
         {
-            // 念のため。通常は発見済みのはず。
-            foundTime = Time.time - gameStartTime;
+            TrySyncFoundTimeFromDroneReports();
         }
 
-        droneReturnTime = Time.time - gameStartTime;
+        if (foundTime < 0f)
+        {
+            foundTime = elapsed;
+        }
+
+        droneReturnTime = Mathf.Max(0f, elapsed - foundTime);
+
         EndGame(GameEndReason.Success);
     }
 
@@ -164,7 +192,17 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // 見つけられなかったので foundTime は -1 のまま
+        // 強制的にSearchFailedにする前に、Drone側では発見済みでないか確認する
+        TrySyncFoundTimeFromDroneReports();
+
+        if (foundTime >= 0f)
+        {
+            // 既に見つけているならSearch失敗ではなくReturn失敗
+            droneReturnTime = -1f;
+            EndGame(GameEndReason.DroneReturnTimeout);
+            return;
+        }
+
         droneReturnTime = -1f;
         EndGame(GameEndReason.SearchTimeout);
     }
@@ -176,9 +214,56 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // foundTime は残す。回収だけFAILにする。
+        TrySyncFoundTimeFromDroneReports();
+
+        if (foundTime < 0f)
+        {
+            // 本当にまだ見つけていない場合はSearch失敗
+            droneReturnTime = -1f;
+            EndGame(GameEndReason.SearchTimeout);
+            return;
+        }
+
         droneReturnTime = -1f;
         EndGame(GameEndReason.DroneReturnTimeout);
+    }
+
+    private bool TrySyncFoundTimeFromDroneReports()
+    {
+        if (foundTime >= 0f)
+        {
+            return true;
+        }
+
+        bool found = false;
+        float earliestObservedAt = float.MaxValue;
+
+        foreach (DroneSwarmAgentState state in DroneSwarmAgentState.ActiveAgents)
+        {
+            if (state == null || state.LocalMap == null)
+            {
+                continue;
+            }
+
+            if (!state.LocalMap.TryGetEarliestTargetReport(out DroneTargetReport report))
+            {
+                continue;
+            }
+
+            if (!found || report.ObservedAt < earliestObservedAt)
+            {
+                earliestObservedAt = report.ObservedAt;
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            return false;
+        }
+
+        foundTime = Mathf.Max(0f, earliestObservedAt - gameStartTime);
+        return true;
     }
 
     public void ForceEnd()
@@ -187,6 +272,8 @@ public class GameFlowController : MonoBehaviour
         {
             return;
         }
+
+        TrySyncFoundTimeFromDroneReports();
 
         if (foundTime < 0f)
         {
@@ -204,6 +291,15 @@ public class GameFlowController : MonoBehaviour
 
     private void EndGame(GameEndReason reason)
     {
+        // 終了直前にもDrone側の発見情報を確認する
+        bool explorerFound = TrySyncFoundTimeFromDroneReports();
+
+        // SearchTimeout扱いで来ても、実はDroneが発見済みならReturn失敗へ変える
+        if (reason == GameEndReason.SearchTimeout && explorerFound)
+        {
+            reason = GameEndReason.DroneReturnTimeout;
+        }
+
         gameRunning = false;
         resultShown = true;
         endReason = reason;
@@ -321,12 +417,15 @@ public class GameFlowController : MonoBehaviour
             resultScreen.SetActive(true);
         }
 
-        SetupFutureResultPreview();
+        SetupResultPreview();
         UpdateResultText();
     }
 
     private void UpdateResultText()
     {
+        bool explorerWasFound = foundTime >= 0f;
+        bool droneReturnSucceeded = endReason == GameEndReason.Success;
+
         if (resultTitleText != null)
         {
             resultTitleText.text = GetResultTitle();
@@ -334,12 +433,16 @@ public class GameFlowController : MonoBehaviour
 
         if (foundTimeText != null)
         {
-            foundTimeText.text = "FoundTime : " + FormatTimeOrFail(foundTime);
+            foundTimeText.text = "FoundTime : " + (explorerWasFound
+                ? FormatTime(foundTime)
+                : "FAIL");
         }
 
         if (droneReturnTimeText != null)
         {
-            droneReturnTimeText.text = "DroneReturnTime : " + FormatTimeOrFail(droneReturnTime);
+            droneReturnTimeText.text = "DroneReturnTime : " + (droneReturnSucceeded
+                ? FormatTime(droneReturnTime)
+                : "FAIL");
         }
 
         if (totalTimeText != null)
@@ -393,7 +496,7 @@ public class GameFlowController : MonoBehaviour
         return $"{minutes:00}:{seconds:00}";
     }
 
-    private void SetupFutureResultPreview()
+    private void SetupResultPreview()
     {
         if (resultPreviewImage == null)
         {
@@ -409,6 +512,37 @@ public class GameFlowController : MonoBehaviour
         resultOverviewCamera.targetTexture = resultOverviewTexture;
         resultPreviewImage.texture = resultOverviewTexture;
         resultPreviewImage.gameObject.SetActive(true);
+        ApplyHiddenLayers(resultOverviewCamera, resultHiddenLayerNames);
+    }
+
+    private void ApplyHiddenLayers(Camera targetCamera, string[] hiddenLayerNames)
+    {
+        if (targetCamera == null || hiddenLayerNames == null)
+        {
+            return;
+        }
+
+        int mask = targetCamera.cullingMask;
+
+        foreach (string layerName in hiddenLayerNames)
+        {
+            if (string.IsNullOrWhiteSpace(layerName))
+            {
+                continue;
+            }
+
+            int layer = LayerMask.NameToLayer(layerName);
+
+            if (layer < 0)
+            {
+                Debug.LogWarning($"{layerName} レイヤーが見つかりません。リザルトカメラでは非表示にできません。");
+                continue;
+            }
+
+            mask &= ~(1 << layer);
+        }
+
+        targetCamera.cullingMask = mask;
     }
 
 

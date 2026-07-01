@@ -2034,7 +2034,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::UiScriptsControl
   droneCameraUiController: {fileID: 1274009054}
-  survivorCameraView: {fileID: 1165865405}
+  explorerCameraView: {fileID: 1165865405}
   simpleTerrainMapCamera: {fileID: 41145397}
   mapTargetMarkerController: {fileID: 41145398}
   explorerStaminaPanelUI: {fileID: 2064926176}
@@ -15039,6 +15039,9 @@ MonoBehaviour:
   fieldOfView: 60
   nearClipPlane: 0.1
   farClipPlane: 500
+  hiddenLayerNames:
+  - GridWorld
+  - Marker
   cropToFill: 1
 --- !u!1 &1169377041
 GameObject:
@@ -22319,7 +22322,7 @@ AudioListener:
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1677288002}
-  m_Enabled: 1
+  m_Enabled: 0
 --- !u!20 &1677288006
 Camera:
   m_ObjectHideFlags: 0
@@ -25315,6 +25318,9 @@ MonoBehaviour:
   resultPreviewImage: {fileID: 1575465732}
   resultOverviewCamera: {fileID: 1677288006}
   resultOverviewTexture: {fileID: 8400000, guid: 6eb8c229baa9c6144acffcdcad990816, type: 2}
+  resultHiddenLayerNames:
+  - GridWorld
+  - Marker
   startSettingsController: {fileID: 1267057029}
 --- !u!4 &1854552324
 Transform:

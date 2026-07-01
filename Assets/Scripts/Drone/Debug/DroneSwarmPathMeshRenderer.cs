@@ -52,6 +52,12 @@ public sealed class DroneSwarmPathMeshRenderer
         }
 
         meshObject = new GameObject("Drone Return Path Mesh");
+
+        if (parent != null)
+        {
+            meshObject.layer = parent.gameObject.layer;
+        }
+
         meshObject.transform.SetParent(parent, false);
         meshFilter = meshObject.AddComponent<MeshFilter>();
         meshRenderer = meshObject.AddComponent<MeshRenderer>();

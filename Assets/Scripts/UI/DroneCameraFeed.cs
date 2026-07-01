@@ -12,7 +12,7 @@ public class DroneCameraFeed : MonoBehaviour
     [Header("Top Down Camera Settings")]
     [SerializeField] private float fieldOfView = 75f;
     [SerializeField] private float minimumCameraHeight = 1.5f;
-    [SerializeField] private float extraFarClipDistance = 2f;
+    [SerializeField] private float extraFarClipDistance = 10f;
 
     [Header("Manual Camera Settings")]
     [SerializeField] private Vector3 manualLocalPosition = new Vector3(0f, 0.35f, 0.6f);
@@ -107,7 +107,7 @@ public class DroneCameraFeed : MonoBehaviour
             droneCamera.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
 
             droneCamera.fieldOfView = fieldOfView;
-            droneCamera.farClipPlane = 1000f;
+            droneCamera.farClipPlane = CalculateTopDownFarClipPlane(cameraHeight);
         }
         else
         {
@@ -115,8 +115,39 @@ public class DroneCameraFeed : MonoBehaviour
             droneCamera.transform.localRotation = Quaternion.Euler(manualLocalEulerAngles);
 
             droneCamera.fieldOfView = fieldOfView;
-            droneCamera.farClipPlane = 1000f;
+            droneCamera.farClipPlane = CalculateManualFarClipPlane();
         }
+    }
+
+    private float CalculateTopDownFarClipPlane(float cameraHeight)
+    {
+        return Mathf.Max(
+            droneCamera.nearClipPlane + 0.01f,
+            cameraHeight + Mathf.Max(0.1f, extraFarClipDistance)
+        );
+    }
+
+    private float CalculateManualFarClipPlane()
+    {
+        float cellSize = 1f;
+        float sensorRadius = 2f;
+
+        DroneGridSensor sensor = GetComponent<DroneGridSensor>();
+
+        if (sensor != null)
+        {
+            sensorRadius = Mathf.Max(1f, sensor.SensorRadius);
+
+            if (sensor.World != null)
+            {
+                cellSize = Mathf.Max(0.1f, sensor.World.CellSize);
+            }
+        }
+
+        float localOffset = manualLocalPosition.magnitude;
+        float visibleRange = sensorRadius * cellSize + localOffset + Mathf.Max(0.1f, extraFarClipDistance);
+
+        return Mathf.Max(droneCamera.nearClipPlane + 0.01f, visibleRange);
     }
 
     private float CalculateTopDownCameraHeight()

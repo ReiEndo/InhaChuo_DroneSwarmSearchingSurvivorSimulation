@@ -3,7 +3,7 @@ using UnityEngine;
 public class UiScriptsControl : MonoBehaviour
 {
     public DroneCameraUiController droneCameraUiController;
-    public SurvivorCameraView survivorCameraView;
+    public ExplorerCameraView explorerCameraView;
     public SimpleTerrainMapCamera simpleTerrainMapCamera;
     public MapTargetMarkerController mapTargetMarkerController;
     public ExplorerStaminaPanelUI explorerStaminaPanelUI;
@@ -12,7 +12,7 @@ public class UiScriptsControl : MonoBehaviour
     public void UI_Start()
     {
         droneCameraUiController.DroneCameraUI_Start();
-        survivorCameraView.ExplorerCamera_Setup();
+        explorerCameraView.ExplorerCamera_Setup();
         simpleTerrainMapCamera.MapCamera_Start();
         mapTargetMarkerController.MapCameraMarker_Start();
         explorerStaminaPanelUI.sutaminaUI_Start();

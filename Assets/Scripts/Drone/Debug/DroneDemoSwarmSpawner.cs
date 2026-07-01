@@ -106,6 +106,9 @@ public sealed class DroneDemoSwarmSpawner
             explorer.PlannerType = plannerType;
             explorers.Add(explorer);
 
+            drone.AddComponent<DroneFoundSignalMarker>();
+            drone.AddComponent<DroneMissionEndReporter>();
+
             var visual = CreateDroneVisual(droneModelPrefab, nonSensedLayer);
             visual.transform.SetParent(drone.transform, false);
             visual.transform.localPosition = Vector3.zero;

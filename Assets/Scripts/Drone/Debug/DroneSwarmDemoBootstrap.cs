@@ -13,7 +13,9 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private const int c_ObstacleLayer = 7;
     private const int c_TargetLayer = 4;
     private const int c_NonSensedLayer = 2;
+    private const string c_GridWorldLayerName = "GridWorld";
     private const float c_DroneCameraFieldOfView = 75f;
+
 
     [Header("Grid")]
     [SerializeField] private int width = 18;
@@ -252,8 +254,28 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private void BuildDebugRenderer()
     {
         var rendererObject = Spawn("Drone Swarm Debug Renderer");
+        ApplyLayerIfExists(rendererObject, c_GridWorldLayerName);
+
         debugRenderer = rendererObject.AddComponent<DroneSwarmDebugRenderer>();
         debugRenderer.Configure(world, commandState, explorers);
+    }
+
+    private void ApplyLayerIfExists(GameObject target, string layerName)
+    {
+        if (target == null || string.IsNullOrWhiteSpace(layerName))
+        {
+            return;
+        }
+
+        int layer = LayerMask.NameToLayer(layerName);
+
+        if (layer < 0)
+        {
+            Debug.LogWarning($"{layerName} レイヤーが見つかりません。GridWorld表示物を専用Layerにできません。");
+            return;
+        }
+
+        target.layer = layer;
     }
 
     private void BuildUi()

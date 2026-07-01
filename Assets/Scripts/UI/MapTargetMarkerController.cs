@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEditor.Timeline;
 using UnityEngine;
 
 public class MapTargetMarkerController : MonoBehaviour
@@ -19,7 +20,7 @@ public class MapTargetMarkerController : MonoBehaviour
     [SerializeField] private Color droneColor = Color.cyan;
 
     [Header("Layer")]
-    [SerializeField] private string markerLayerName = "Default";
+    [SerializeField] private string markerLayerName = "Marker";
 
     [Header("Refresh")]
     [SerializeField] private float refreshInterval = 0.5f;
@@ -38,6 +39,11 @@ public class MapTargetMarkerController : MonoBehaviour
         if (terrain == null)
         {
             terrain = FindAnyObjectByType<Terrain>();
+        }
+
+        if (markerLayerName == "Default")
+        {
+            markerLayerName = "Marker";
         }
 
         markerLayer = LayerMask.NameToLayer(markerLayerName);

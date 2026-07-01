@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 
-public class SurvivorCameraView : MonoBehaviour
+public class ExplorerCameraView : MonoBehaviour
 {
     [Header("References")]
     [SerializeField] private Camera survivorCamera;
@@ -16,6 +16,9 @@ public class SurvivorCameraView : MonoBehaviour
     [SerializeField] private float fieldOfView = 60f;
     [SerializeField] private float nearClipPlane = 0.1f;
     [SerializeField] private float farClipPlane = 500f;
+
+    [Header("Hidden Layers")]
+    [SerializeField] private string[] hiddenLayerNames = { "GridWorld", "Marker" };
 
     [Header("Fit Mode")]
     [SerializeField] private bool cropToFill = true;
@@ -51,6 +54,7 @@ public class SurvivorCameraView : MonoBehaviour
         survivorCamera.fieldOfView = fieldOfView;
         survivorCamera.nearClipPlane = nearClipPlane;
         survivorCamera.farClipPlane = farClipPlane;
+        ApplyHiddenLayers(survivorCamera);
 
         AudioListener listener = survivorCamera.GetComponent<AudioListener>();
 
@@ -168,5 +172,34 @@ public class SurvivorCameraView : MonoBehaviour
             renderTexture.Release();
             Destroy(renderTexture);
         }
+    }
+    private void ApplyHiddenLayers(Camera targetCamera)
+    {
+        if (targetCamera == null || hiddenLayerNames == null)
+        {
+            return;
+        }
+
+        int mask = targetCamera.cullingMask;
+
+        foreach (string layerName in hiddenLayerNames)
+        {
+            if (string.IsNullOrWhiteSpace(layerName))
+            {
+                continue;
+            }
+
+            int layer = LayerMask.NameToLayer(layerName);
+
+            if (layer < 0)
+            {
+                Debug.LogWarning($"{layerName} レイヤーが見つかりません。遭難者カメラでは非表示にできません。");
+                continue;
+            }
+
+            mask &= ~(1 << layer);
+        }
+
+        targetCamera.cullingMask = mask;
     }
 }

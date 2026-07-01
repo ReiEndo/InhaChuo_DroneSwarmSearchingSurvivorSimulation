@@ -137,6 +137,12 @@ public sealed class DroneSwarmMapTileRenderer
         }
 
         meshObject = new GameObject("Drone Map Tiles Mesh");
+
+        if (parent != null)
+        {
+            meshObject.layer = parent.gameObject.layer;
+        }
+
         meshObject.transform.SetParent(parent, false);
         meshFilter = meshObject.AddComponent<MeshFilter>();
         meshRenderer = meshObject.AddComponent<MeshRenderer>();
