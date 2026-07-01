@@ -34,6 +34,9 @@ public class MapTargetMarkerController : MonoBehaviour
     private float nextRefreshTime;
     private int markerLayer;
 
+    private Explorer cachedExplorer;
+    private DroneFrontierExplorer[] cachedDrones = System.Array.Empty<DroneFrontierExplorer>();
+
     public void MapCameraMarker_Start()
     {
         if (terrain == null)
@@ -82,6 +85,9 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private void RefreshMarkers()
     {
+        cachedExplorer = FindAnyObjectByType<Explorer>();
+        cachedDrones = FindObjectsByType<DroneFrontierExplorer>();
+
         RefreshExplorerMarker();
         RefreshDroneMarkers();
     }
@@ -131,7 +137,7 @@ public class MapTargetMarkerController : MonoBehaviour
         }
     }
 
-    private void UpdateExplorerMarker()
+    /*private void UpdateExplorerMarker()
     {
         if (!showExplorerMarker)
         {
@@ -152,9 +158,18 @@ public class MapTargetMarkerController : MonoBehaviour
         }
 
         explorerMarker.transform.position = GetMarkerPosition(explorer.transform.position);
+    }*/
+    private void UpdateExplorerMarker()
+    {
+        if (cachedExplorer == null || explorerMarker == null)
+        {
+            return;
+        }
+
+        explorerMarker.transform.position = GetMarkerPosition(cachedExplorer.transform.position);
     }
 
-    private void UpdateDroneMarkers()
+    /*private void UpdateDroneMarkers()
     {
         if (!showDroneMarkers)
         {
@@ -171,6 +186,18 @@ public class MapTargetMarkerController : MonoBehaviour
             }
 
             droneMarkers[i].transform.position = GetMarkerPosition(drones[i].transform.position);
+        }
+    }*/
+    private void UpdateDroneMarkers()
+    {
+        for (int i = 0; i < cachedDrones.Length && i < droneMarkers.Count; i++)
+        {
+            if (cachedDrones[i] == null || droneMarkers[i] == null)
+            {
+                continue;
+            }
+
+            droneMarkers[i].transform.position = GetMarkerPosition(cachedDrones[i].transform.position);
         }
     }
 

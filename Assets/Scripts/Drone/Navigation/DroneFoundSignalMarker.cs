@@ -6,11 +6,16 @@ public sealed class DroneFoundSignalMarker : MonoBehaviour
 {
     [Header("Signal Marker")]
     [SerializeField] private string markerLayerName = "Marker";
-    [SerializeField] private Vector3 localPosition = new Vector3(0f, 0.75f, 0f);
-    [SerializeField] private float antennaHeight = 0.6f;
+    [SerializeField] private Vector3 localPosition = new Vector3(0f, 0.4f, 0f);
+    [SerializeField] private float antennaHeight = 0.01f;
     [SerializeField] private float antennaRadius = 0.005f;
-    [SerializeField] private float lightRadius = 0.05f;
+    [SerializeField] private float lightRadius = 0.025f;
     [SerializeField] private Color signalColor = Color.red;
+
+    [Header("Light Settings")]
+    [SerializeField] private float pointLightIntensity = 0.15f;
+    [SerializeField] private float pointLightRange = 0.3f;
+    [SerializeField] private float emissionStrength = 0.5f;
 
     [Header("Behavior")]
     [SerializeField] private bool showOnlyWhenThisDroneDirectlyFindsTarget = true;
@@ -121,8 +126,9 @@ public sealed class DroneFoundSignalMarker : MonoBehaviour
         Light pointLight = light.AddComponent<Light>();
         pointLight.type = LightType.Point;
         pointLight.color = signalColor;
-        pointLight.range = 2f;
-        pointLight.intensity = 2f;
+        pointLight.range = pointLightRange;
+        pointLight.intensity = pointLightIntensity;
+
     }
 
     private Material CreateSignalMaterial()
@@ -140,7 +146,7 @@ public sealed class DroneFoundSignalMarker : MonoBehaviour
         if (material.HasProperty("_EmissionColor"))
         {
             material.EnableKeyword("_EMISSION");
-            material.SetColor("_EmissionColor", signalColor * 2f);
+            material.SetColor("_EmissionColor", signalColor * emissionStrength);
         }
 
         return material;

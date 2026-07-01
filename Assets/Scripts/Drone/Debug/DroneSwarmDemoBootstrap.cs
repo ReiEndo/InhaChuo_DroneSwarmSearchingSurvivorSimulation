@@ -245,10 +245,13 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         commandRoutePlanner = result.CommandRoutePlanner;
         ApplyDroneSpeed();
 
+        /*
+        DroneCameraFeed.csで生成しているため、一時停止
         if (!IsBatchRun)
         {
             BuildDroneCameras();
         }
+        */
     }
 
     private void BuildDebugRenderer()

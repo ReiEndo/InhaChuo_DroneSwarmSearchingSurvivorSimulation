@@ -106,6 +106,7 @@ public sealed class DroneDemoSwarmSpawner
             explorer.PlannerType = plannerType;
             explorers.Add(explorer);
 
+            drone.AddComponent<DroneAltitudeKeeper>();
             drone.AddComponent<DroneFoundSignalMarker>();
             drone.AddComponent<DroneMissionEndReporter>();
 
