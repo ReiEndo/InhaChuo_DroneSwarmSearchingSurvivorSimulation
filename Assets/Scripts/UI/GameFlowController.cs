@@ -261,7 +261,7 @@ public class GameFlowController : MonoBehaviour
 
     private void ShowGameScreen()
     {
-        if (startRoot  == null)
+        if (startRoot  != null)
         {
             startRoot.SetActive(false);
         }
