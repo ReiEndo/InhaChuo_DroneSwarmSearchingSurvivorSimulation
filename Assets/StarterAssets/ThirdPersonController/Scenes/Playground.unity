@@ -514,6 +514,79 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 877cdc97b6d23784089bb95adc3b2202, type: 3}
+--- !u!1 &227788760
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 227788762}
+  - component: {fileID: 227788761}
+  m_Layer: 0
+  m_Name: DroneMissionTimedBatchRunner
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &227788761
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 227788760}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 386c1174f36544d18ae50d6c313c3eff, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::DroneMissionTimedBatchRunner
+  bootstrap: {fileID: 633502256}
+  terrainGenerator: {fileID: 986082011}
+  forestSpawner: {fileID: 2138067897}
+  explorer: {fileID: 1762682267}
+  telemetryRecorder: {fileID: 0}
+  autoStartOnPlay: 1
+  startDelaySeconds: 0.5
+  runSegmentMinutes: 5
+  betweenMissionsDelaySeconds: 0.25
+  sessionStartTimeoutSeconds: 10
+  perSessionTimeoutSeconds: 120
+  allowActiveMissionToFinishAfterSegment: 1
+  restMinutes: 10
+  disableRenderingDuringRest: 1
+  pauseSimulationDuringRest: 1
+  targetValidMissions: 100
+  validEndReason: mission_complete
+  maxWallClockHours: 8
+  regenerateTerrainEachRun: 1
+  clearForestBeforeSpawning: 1
+  spawnForestEachRun: 1
+  respawnExplorerEachRun: 1
+  useDeterministicSeeds: 1
+  baseSeed: 10000
+  droneCount: 5
+  sensorRadius: 6
+  communicationRadius: 8
+  droneSpeed: 8
+  plannerType: 1
+--- !u!4 &227788762
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 227788760}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &257804637
 GameObject:
   m_ObjectHideFlags: 0
@@ -3960,7 +4033,6 @@ MonoBehaviour:
   obstacleAvoidDuration: 1
   obstacleAvoidAngle: 55
   terrainMargin: 10
-  maxTargetSearchAttemptsPerFrame: 32
   fallbackTargetSearchAttempts: 96
   fallbackMinTargetDistance: 3
   obstacleMask:
@@ -5132,3 +5204,4 @@ SceneRoots:
   - {fileID: 1680071146}
   - {fileID: 1274009053}
   - {fileID: 41145396}
+  - {fileID: 227788762}

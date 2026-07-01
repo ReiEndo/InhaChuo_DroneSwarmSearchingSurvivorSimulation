@@ -107,6 +107,112 @@ public sealed class DroneMissionTelemetryRecorder : MonoBehaviour
     public string ActiveSessionId => sessionId;
     public float ElapsedSeconds => activeSession ? Mathf.Max(0f, Time.time - sessionStartTime) : 0f;
     public string OutputDirectory => Path.Combine(Application.persistentDataPath, outputDirectoryName);
+    public string SummaryFilePath => Path.Combine(OutputDirectory, summaryFileName);
+
+    /// <summary>
+    /// Counts summary rows whose <c>end_reason</c> column matches <paramref name="endReason"/>.
+    /// Used by batch runners to stop once enough valid missions have been collected.
+    /// Returns 0 when the summary CSV does not exist yet.
+    /// </summary>
+    public int CountSessionsWithEndReason(string endReason)
+    {
+        if (string.IsNullOrEmpty(endReason))
+        {
+            return 0;
+        }
+
+        string path = SummaryFilePath;
+        if (!File.Exists(path))
+        {
+            return 0;
+        }
+
+        int endIndex = Array.IndexOf(SummaryHeader, "end_reason");
+        if (endIndex < 0)
+        {
+            return 0;
+        }
+
+        int count = 0;
+        try
+        {
+            using (var reader = new StreamReader(path, CsvEncoding))
+            {
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    if (string.IsNullOrEmpty(line))
+                    {
+                        continue;
+                    }
+
+                    string[] fields = ParseCsvLine(line);
+                    if (fields.Length <= endIndex)
+                    {
+                        continue;
+                    }
+
+                    if (fields[endIndex] == endReason)
+                    {
+                        count++;
+                    }
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogWarning($"[DroneTelemetry] Failed to read {path}: {exception.Message}", this);
+        }
+
+        return count;
+    }
+
+    private static string[] ParseCsvLine(string line)
+    {
+        var result = new List<string>();
+        var current = new StringBuilder();
+        bool inQuotes = false;
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (inQuotes)
+            {
+                if (c == '"')
+                {
+                    if (i + 1 < line.Length && line[i + 1] == '"')
+                    {
+                        current.Append('"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = false;
+                    }
+                }
+                else
+                {
+                    current.Append(c);
+                }
+            }
+            else if (c == '"')
+            {
+                inQuotes = true;
+            }
+            else if (c == ',')
+            {
+                result.Add(current.ToString());
+                current.Clear();
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+
+        result.Add(current.ToString());
+        return result.ToArray();
+    }
 
     private void OnValidate()
     {
