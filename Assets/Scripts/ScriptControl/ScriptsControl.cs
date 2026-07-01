@@ -39,6 +39,18 @@ public class ScriptsControl : MonoBehaviour
             }
         }
 
+        if (!batchAutoStartEnabled)
+        {
+            foreach (var timedRunner in FindObjectsByType<DroneMissionTimedBatchRunner>(FindObjectsSortMode.None))
+            {
+                if (timedRunner != null && timedRunner.AutoStartOnPlay)
+                {
+                    batchAutoStartEnabled = true;
+                    break;
+                }
+            }
+        }
+
         terrainGenerator.GenerateTerrain();
 
         if (droneSwarmDemoBootstrap != null &&

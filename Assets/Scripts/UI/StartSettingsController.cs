@@ -12,6 +12,7 @@ public class StartSettingsController : MonoBehaviour
     [SerializeField] private ForestSpawner forestSpawner;
     [SerializeField] private DroneSwarmDemoBootstrap droneSwarmDemoBootstrap;
     [SerializeField] private Explorer explorer;
+    [SerializeField] private GameFlowController gameFlowController;
 
     [Header("TerrainGenerator")]
     [SerializeField] private TMP_InputField terrainWidthXInput;
@@ -40,6 +41,12 @@ public class StartSettingsController : MonoBehaviour
     [SerializeField] private TMP_InputField droneSensorRadiusInput;
     [SerializeField] private TMP_InputField droneCommunicationRadiusInput;
     [SerializeField] private TMP_InputField droneSpeedInput;
+
+    [Header("Time Limit")]
+    [SerializeField] private Toggle useSearchTimeLimitToggle;
+    [SerializeField] private TMP_InputField searchTimeLimitInput;
+    [SerializeField] private Toggle useDroneReturnTimeLimitToggle;
+    [SerializeField] private TMP_InputField droneReturnTimeLimitInput;
 
     [Header("Explorer")]
     [SerializeField] private TMP_InputField explorerScanRadiusInput;
@@ -88,6 +95,7 @@ public class StartSettingsController : MonoBehaviour
         ApplyForestSettings();
         ApplyDroneSettings();
         ApplyExplorerSettings();
+        ApplyGameFlowSettings();
     }
 
     private void LoadCurrentValuesToUI()
@@ -120,6 +128,15 @@ public class StartSettingsController : MonoBehaviour
             SetText(droneCommunicationRadiusInput, droneSwarmDemoBootstrap.CommunicationRadius);
             SetText(droneSpeedInput, droneSwarmDemoBootstrap.DroneSpeed);
             SetText(droneCellSizeInput, droneSwarmDemoBootstrap.CellSize);
+        }
+
+        if (gameFlowController != null)
+        {
+            SetToggle(useSearchTimeLimitToggle, gameFlowController.UseSearchTimeLimit);
+            SetText(searchTimeLimitInput, gameFlowController.SearchTimeLimitSeconds);
+
+            SetToggle(useDroneReturnTimeLimitToggle, gameFlowController.UseDroneReturnTimeLimit);
+            SetText(droneReturnTimeLimitInput, gameFlowController.DroneReturnTimeLimitSeconds);
         }
 
         if (explorer != null)
@@ -246,6 +263,45 @@ public class StartSettingsController : MonoBehaviour
         explorer.maxWalkableSlope = GetFloat(explorerMaxWalkableSlopeInput, explorer.maxWalkableSlope, 0f, 90f);
     }
 
+    private void ApplyGameFlowSettings()
+    {
+        if (gameFlowController == null)
+        {
+            return;
+        }
+
+        bool useSearchTimeLimit =
+            useSearchTimeLimitToggle != null
+                ? useSearchTimeLimitToggle.isOn
+                : gameFlowController.UseSearchTimeLimit;
+
+        float searchTimeLimitSeconds = GetFloat(
+            searchTimeLimitInput,
+            gameFlowController.SearchTimeLimitSeconds,
+            1f,
+            36000f
+        );
+
+        bool useDroneReturnTimeLimit =
+            useDroneReturnTimeLimitToggle != null
+                ? useDroneReturnTimeLimitToggle.isOn
+                : gameFlowController.UseDroneReturnTimeLimit;
+
+        float droneReturnTimeLimitSeconds = GetFloat(
+            droneReturnTimeLimitInput,
+            gameFlowController.DroneReturnTimeLimitSeconds,
+            1f,
+            36000f
+        );
+
+        gameFlowController.ConfigureTimeLimits(
+            useSearchTimeLimit,
+            searchTimeLimitSeconds,
+            useDroneReturnTimeLimit,
+            droneReturnTimeLimitSeconds
+        );
+    }
+
     private int GetInt(TMP_InputField input, int currentValue, int min, int max)
     {
         if (input == null)
@@ -297,6 +353,13 @@ public class StartSettingsController : MonoBehaviour
         if (input != null)
         {
             input.text = value.ToString("0.###");
+        }
+    }
+    private void SetToggle(Toggle toggle, bool value)
+    {
+        if (toggle != null)
+        {
+            toggle.isOn = value;
         }
     }
 }

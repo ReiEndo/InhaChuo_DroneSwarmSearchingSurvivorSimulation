@@ -410,4 +410,23 @@ public class GameFlowController : MonoBehaviour
         resultPreviewImage.texture = resultOverviewTexture;
         resultPreviewImage.gameObject.SetActive(true);
     }
+
+
+    public bool UseSearchTimeLimit => useSearchTimeLimit;
+    public float SearchTimeLimitSeconds => searchTimeLimitSeconds;
+    public bool UseDroneReturnTimeLimit => useDroneReturnTimeLimit;
+    public float DroneReturnTimeLimitSeconds => droneReturnTimeLimitSeconds;
+    public void ConfigureTimeLimits(
+    bool newUseSearchTimeLimit,
+    float newSearchTimeLimitSeconds,
+    bool newUseDroneReturnTimeLimit,
+    float newDroneReturnTimeLimitSeconds
+    )
+    {
+        useSearchTimeLimit = newUseSearchTimeLimit;
+        searchTimeLimitSeconds = Mathf.Max(1f, newSearchTimeLimitSeconds);
+
+        useDroneReturnTimeLimit = newUseDroneReturnTimeLimit;
+        droneReturnTimeLimitSeconds = Mathf.Max(1f, newDroneReturnTimeLimitSeconds);
+    }
 }

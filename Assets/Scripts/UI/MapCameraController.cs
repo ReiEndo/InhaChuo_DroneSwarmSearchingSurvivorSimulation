@@ -37,7 +37,7 @@ public class SimpleTerrainMapCamera : MonoBehaviour
     {
         ResolveReferences();
 
-        if (terrain == null || terrain.terrainData == null)
+        if (terrain == null || terrain.terrainData == null || mapCamera == null)
         {
             return;
         }
