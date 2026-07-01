@@ -77,6 +77,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     public bool IsResetQueued => resetQueued;
     public bool IsTelemetrySessionActive => telemetryRecorder != null && telemetryRecorder.HasActiveSession;
     public string ActiveTelemetrySessionId => telemetryRecorder != null ? telemetryRecorder.ActiveSessionId : string.Empty;
+    private bool IsBatchRun => !string.IsNullOrEmpty(telemetryBatchId) || telemetryHasBatchRunIndex;
 
     public void ConfigureExperiment(
         int newDroneCount,
@@ -240,8 +241,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         commandState = result.CommandState;
         commandRoutePlanner = result.CommandRoutePlanner;
         ApplyDroneSpeed();
-        //UI新規作成のためコメントアウト↓
-        //BuildDroneCameras();
+
+        if (!IsBatchRun)
+        {
+            BuildDroneCameras();
+        }
     }
 
     private void BuildDebugRenderer()

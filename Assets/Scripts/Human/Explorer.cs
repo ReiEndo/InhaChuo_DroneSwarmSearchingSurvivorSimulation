@@ -137,9 +137,24 @@ public class Explorer : MonoBehaviour
             return;
         }
 
-        while (!hasTarget)
+        // Bounded retry per frame: if no valid target is found this frame, give up
+        // for now and try again next frame. Previously this was an unbounded
+        // `while (!hasTarget)` busy-wait that froze the main thread whenever every
+        // random candidate was blocked (e.g. explorer boxed in by trees after a
+        // batch run respawned it into a freshly forested world).
+        const int maxTargetSearchAttemptsPerFrame = 32;
+        int attemptsThisFrame = 0;
+        while (!hasTarget && attemptsThisFrame < maxTargetSearchAttemptsPerFrame)
         {
             TryFindUnknownTarget();
+            attemptsThisFrame++;
+        }
+
+        if (!hasTarget)
+        {
+            // Could not find a valid target this frame; stay idle and retry next frame.
+            SetIdleAnimation();
+            return;
         }
 
         StopRestAnimation();
