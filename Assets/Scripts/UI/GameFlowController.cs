@@ -29,7 +29,7 @@ public class GameFlowController : MonoBehaviour
 
     [Header("Time Limits")]
     [SerializeField] private bool useSearchTimeLimit = true;
-    [SerializeField] private float searchTimeLimitSeconds = 300f;
+    [SerializeField] private float searchTimeLimitSeconds = 180f;
 
     [SerializeField] private bool useDroneReturnTimeLimit = true;
     [SerializeField] private float droneReturnTimeLimitSeconds = 180f;

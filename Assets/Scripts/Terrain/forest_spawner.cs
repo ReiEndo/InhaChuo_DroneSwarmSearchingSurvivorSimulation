@@ -7,9 +7,18 @@ public class ForestSpawner : MonoBehaviour
     [Header("Terrain")]
     public Terrain terrain;
 
-    [Header("Tree Settings")]
-    public GameObject[] treePrefabs;
-    public int treeCount = 1000;
+    [Header("Prefab Settings")]
+    public GameObject treePrefab;
+    public GameObject rockPrefab;
+
+    [Header("Density Settings")]
+    [Tooltip("The number of trees & rocks per 100m²")]
+    [Min(0f)]
+    public float objectsPer100SquareMeters = 2.5f;
+
+    [Tooltip("Trees or Rocks percentage")]
+    [Range(0f, 100f)]
+    public float treePercent = 66f;
 
     [Header("Spawn Area")]
     public float minHeight = 0f;
@@ -108,11 +117,21 @@ public class ForestSpawner : MonoBehaviour
         TerrainData terrainData = terrain.terrainData;
         Vector3 terrainPos = terrain.transform.position;
 
-        int spawnedCount = 0;
-        int attempts = 0;
-        int maxAttempts = treeCount * maxSpawnAttemptCounts;
+        int targetTotalCount = CalculateTargetTotalCount(terrainData);
+        CalculateTargetCounts(
+            targetTotalCount,
+            out int targetTreeCount,
+            out int targetRockCount
+        );
 
-        while (spawnedCount < treeCount && attempts < maxAttempts)
+        int spawnedCount = 0;
+        int spawnedTreeCount = 0;
+        int spawnedRockCount = 0;
+
+        int attempts = 0;
+        int maxAttempts = Mathf.Max(1, targetTotalCount * maxSpawnAttemptCounts);
+
+        while (spawnedCount < targetTotalCount && attempts < maxAttempts)
         {
             attempts++;
 
@@ -124,7 +143,7 @@ public class ForestSpawner : MonoBehaviour
             float worldX = randomX + terrainPos.x;
             float worldZ = randomZ + terrainPos.z;
             float y = terrain.SampleHeight(
-                new Vector3(worldX, 0, worldZ)
+                new Vector3(worldX, 0f, worldZ)
             );
 
             Vector3 worldPos = new Vector3(
@@ -146,41 +165,130 @@ public class ForestSpawner : MonoBehaviour
             float slope = Vector3.Angle(normal, Vector3.up);
 
             // 急斜面回避
-            if (slope > maxSlope)
-                continue;
+            if (slope > maxSlope) continue;
 
             //木同士の最低距離制限
             Vector2 candidateXZ = new Vector2(worldX, worldZ);
             if (!IsFarEnoughFromOtherTrees(candidateXZ, spawnedTreePositions)) continue;
 
             // Prefab選択
-            GameObject prefab =
-                treePrefabs[Random.Range(0, treePrefabs.Length)];
+            bool spawnTree;
+            GameObject prefab = ChoosePrefab(
+                spawnedTreeCount,
+                targetTreeCount,
+                spawnedRockCount,
+                targetRockCount,
+                out spawnTree
+            );
 
-            // 生成
-            GameObject tree = Instantiate(
+            if (prefab == null)
+            {
+                continue;
+            }
+
+            GameObject spawnedObject = Instantiate(
                 prefab,
                 worldPos,
                 Quaternion.identity,
                 transform
             );
 
+            spawnedObject.name = spawnTree ? "Spawned Tree" : "Spawned Rock";
+
             // ランダム回転
-            tree.transform.Rotate(0, Random.Range(0, 360), 0);
+            spawnedObject.transform.Rotate(0, Random.Range(0, 360), 0);
 
             // ランダムスケール
             float scale = Random.Range(scaleRange.x, scaleRange.y);
-            tree.transform.localScale *= scale;
+            spawnedObject.transform.localScale *= scale;
 
             spawnedTreePositions.Add(candidateXZ);
             spawnedCount++;
 
-            PrepareTreeForDroneSensing(tree);
+            if (spawnTree)
+            {
+                spawnedTreeCount++;
+            }
+            else
+            {
+                spawnedRockCount++;
+            }
+
+            PrepareObstacleForDroneSensing(spawnedObject);
         }
-        if (spawnedCount * 2 < treeCount)
+        if (spawnedCount * 2 < targetTotalCount)
         {
-            Debug.LogWarning($"[forest_spawner Alert!]The number of Spawned Trees are {spawnedCount} regardless of TreeCount{treeCount}. minDistance in forest_spawner might be too large!");
+            Debug.LogWarning(
+                $"[ForestSpawner] 予定数 {targetTotalCount} 個に対して {spawnedCount} 個しか生成できませんでした。" +
+                $" minDistance が大きすぎる、または高さ・傾斜条件が厳しすぎる可能性があります。"
+            );
         }
+        Debug.Log(
+            $"[ForestSpawner] Total:{spawnedCount}, Trees:{spawnedTreeCount}, Rocks:{spawnedRockCount}, " +
+            $"TerrainArea:{terrainData.size.x * terrainData.size.z}m²"
+        );
+    }
+
+    private int CalculateTargetTotalCount(TerrainData terrainData)
+    {
+        float terrainArea = terrainData.size.x * terrainData.size.z;
+        float areaUnitCount = terrainArea / 100f;
+
+        return Mathf.RoundToInt(areaUnitCount * Mathf.Max(0f, objectsPer100SquareMeters));
+    }
+    private void CalculateTargetCounts(
+        int targetTotalCount,
+        out int targetTreeCount,
+        out int targetRockCount
+    )
+    {
+        float clampedTreePercent = Mathf.Clamp(treePercent, 0f, 100f);
+
+        targetTreeCount = Mathf.RoundToInt(targetTotalCount * clampedTreePercent / 100f);
+        targetRockCount = targetTotalCount - targetTreeCount;
+    }
+
+    private GameObject ChoosePrefab(
+    int spawnedTreeCount,
+    int targetTreeCount,
+    int spawnedRockCount,
+    int targetRockCount,
+    out bool spawnTree
+)
+    {
+        // 木が必要ない場合は岩だけ
+        if (targetTreeCount <= 0)
+        {
+            spawnTree = false;
+            return rockPrefab;
+        }
+
+        // 岩が必要ない場合は木だけ
+        if (targetRockCount <= 0)
+        {
+            spawnTree = true;
+            return treePrefab;
+        }
+
+        // 木が目標数に達していたら岩
+        if (spawnedTreeCount >= targetTreeCount)
+        {
+            spawnTree = false;
+            return rockPrefab;
+        }
+
+        // 岩が目標数に達していたら木
+        if (spawnedRockCount >= targetRockCount)
+        {
+            spawnTree = true;
+            return treePrefab;
+        }
+
+        // まだ両方生成可能なら割合に従って選ぶ
+        float treeRate = Mathf.Clamp01(treePercent / 100f);
+        spawnTree = Random.value < treeRate;
+
+        return spawnTree ? treePrefab : rockPrefab;
     }
 
     bool IsFarEnoughFromOtherTrees(Vector2 candidatePosition, List<Vector2> spawnedTreePositions)
@@ -194,20 +302,28 @@ public class ForestSpawner : MonoBehaviour
         }
         return true;
     }
-    void PrepareTreeForDroneSensing(GameObject tree)
+    void PrepareObstacleForDroneSensing(GameObject obstacle)
     {
-        if (tree == null)
+        if (obstacle == null)
+        {
             return;
+        }
 
         if (setLayerRecursively)
-            SetLayerRecursively(tree, obstacleLayer);
+        {
+            SetLayerRecursively(obstacle, obstacleLayer);
+        }
         else
-            tree.layer = obstacleLayer;
+        {
+            obstacle.layer = obstacleLayer;
+        }
 
-        if (!addMissingCollisionProxy || tree.GetComponentInChildren<Collider>() != null)
+        if (!addMissingCollisionProxy || obstacle.GetComponentInChildren<Collider>() != null)
+        {
             return;
+        }
 
-        CapsuleCollider proxy = tree.AddComponent<CapsuleCollider>();
+        CapsuleCollider proxy = obstacle.AddComponent<CapsuleCollider>();
         proxy.isTrigger = true;
         proxy.radius = Mathf.Max(0.01f, proxyRadius);
         proxy.height = Mathf.Max(proxy.radius * 2f, proxyHeight);

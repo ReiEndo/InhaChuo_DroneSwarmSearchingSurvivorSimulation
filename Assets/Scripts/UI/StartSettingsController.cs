@@ -1,3 +1,4 @@
+using Newtonsoft.Json.Bson;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -15,13 +16,17 @@ public class StartSettingsController : MonoBehaviour
     [SerializeField] private GameFlowController gameFlowController;
 
     [Header("TerrainGenerator")]
-    [SerializeField] private TMP_InputField terrainWidthXInput;
-    [SerializeField] private TMP_InputField terrainWidthZInput;
+    [SerializeField] private TMP_InputField terrainWidthInput;
     [SerializeField] private TMP_InputField terrainScaleInput;
     [SerializeField] private TMP_InputField terrainHeightInput;
 
     [Header("ForestSpawner")]
-    [SerializeField] private TMP_InputField treeCountInput;
+    [SerializeField] private TMP_InputField CountPer100mmInput;
+
+    [SerializeField] private Slider treePercentSlider;
+    [SerializeField] private TextMeshProUGUI treePercentValueText;
+    [SerializeField] private TextMeshProUGUI rockPercentValueText;
+
     [SerializeField] private TMP_InputField minHeightInput;
     [SerializeField] private TMP_InputField maxHeightInput;
     [SerializeField] private TMP_InputField maxSlopeInput;
@@ -103,15 +108,14 @@ public class StartSettingsController : MonoBehaviour
 
         if (terrainGenerator != null)
         {
-            SetText(terrainWidthXInput, terrainGenerator.widthx);
-            SetText(terrainWidthZInput, terrainGenerator.widthz);
+            SetText(terrainWidthInput, terrainGenerator.widthx);
             SetText(terrainScaleInput, terrainGenerator.scale);
             SetText(terrainHeightInput, terrainGenerator.terrainHeight);
         }
 
         if (forestSpawner != null)
         {
-            SetText(treeCountInput, forestSpawner.treeCount);
+            SetText(CountPer100mmInput, forestSpawner.objectsPer100SquareMeters);
             SetText(minHeightInput, forestSpawner.minHeight);
             SetText(maxHeightInput, forestSpawner.maxHeight);
             SetText(maxSlopeInput, forestSpawner.maxSlope);
@@ -119,6 +123,9 @@ public class StartSettingsController : MonoBehaviour
             SetText(treeScaleMaxInput, forestSpawner.scaleRange.y);
             SetText(minTreeDistanceInput, forestSpawner.minDistance);
             SetText(maxSpawnAttemptInput, forestSpawner.maxSpawnAttemptCounts);
+
+            SetSlider(treePercentSlider, forestSpawner.treePercent);
+            UpdateTreePercentText(forestSpawner.treePercent);
         }
 
         if (droneSwarmDemoBootstrap != null)
@@ -160,8 +167,8 @@ public class StartSettingsController : MonoBehaviour
             return;
         }
 
-        terrainGenerator.widthx = GetInt(terrainWidthXInput, terrainGenerator.widthx, 4, 2048);
-        terrainGenerator.widthz = GetInt(terrainWidthZInput, terrainGenerator.widthz, 4, 2048);
+        terrainGenerator.widthx = GetInt(terrainWidthInput, terrainGenerator.widthx, 4, 2048);
+        terrainGenerator.widthz = GetInt(terrainWidthInput, terrainGenerator.widthz, 4, 2048);
         terrainGenerator.scale = GetFloat(terrainScaleInput, terrainGenerator.scale, 1f, 5000f);
         terrainGenerator.terrainHeight = GetFloat(terrainHeightInput, terrainGenerator.terrainHeight, 1f, 1000f);
     }
@@ -173,7 +180,7 @@ public class StartSettingsController : MonoBehaviour
             return;
         }
 
-        forestSpawner.treeCount = GetInt(treeCountInput, forestSpawner.treeCount, 0, 100000);
+        forestSpawner.objectsPer100SquareMeters = GetFloat(CountPer100mmInput, forestSpawner.objectsPer100SquareMeters, 0f, 100f);
         forestSpawner.minHeight = GetFloat(minHeightInput, forestSpawner.minHeight, -1000f, 10000f);
         forestSpawner.maxHeight = GetFloat(maxHeightInput, forestSpawner.maxHeight, -1000f, 10000f);
         forestSpawner.maxSlope = GetFloat(maxSlopeInput, forestSpawner.maxSlope, 0f, 60f);
@@ -190,6 +197,9 @@ public class StartSettingsController : MonoBehaviour
 
         forestSpawner.minDistance = GetFloat(minTreeDistanceInput, forestSpawner.minDistance, 0f, 1000f);
         forestSpawner.maxSpawnAttemptCounts = GetInt(maxSpawnAttemptInput, forestSpawner.maxSpawnAttemptCounts, 1, 10000);
+
+        forestSpawner.treePercent = GetSliderValue(treePercentSlider, forestSpawner.treePercent);
+
     }
 
     private void ApplyDroneSettings()
@@ -361,5 +371,43 @@ public class StartSettingsController : MonoBehaviour
         {
             toggle.isOn = value;
         }
+    }
+    private void SetSlider(Slider slider, float value)
+    {
+        if(slider == null)
+        {
+            return;
+        }
+        slider.minValue = 0f;
+        slider.maxValue = 100f;
+        slider.wholeNumbers = true;
+        slider.value = Mathf.Clamp(value, slider.minValue, slider.maxValue);
+    }
+    private float GetSliderValue(Slider slider, float currentValue)
+    {
+        if(slider == null)
+        {
+            return currentValue;
+        }
+        return slider.value;
+    }
+    private void UpdateTreePercentText(float treePercent)
+    {
+        if(treePercentValueText  == null)
+        {
+            return;
+        }
+        float clampedTreePercent = Mathf.Clamp(treePercent, 0f, 100f);
+        float rockPercent = 100f - clampedTreePercent;
+        treePercentValueText.text = $"Tree {clampedTreePercent:0}%";
+        rockPercentValueText.text = $"Rock {rockPercent:0}%";
+    }
+    public void OnTreePercentSliderChanged()
+    {
+        if(treePercentSlider == null)
+        {
+            return;
+        }
+        UpdateTreePercentText(treePercentSlider.value);
     }
 }
