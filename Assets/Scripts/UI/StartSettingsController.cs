@@ -157,9 +157,9 @@ public class StartSettingsController : MonoBehaviour
             SetText(explorerScanRadiusInput, explorer.scanRadius);
             SetText(explorerMinTargetDistanceInput, explorer.minTargetDistance);
             SetText(explorerMoveSpeedInput, explorer.moveSpeed);
-            SetText(explorerStaminaInput, explorer.stamina);
+            SetText(explorerStaminaInput, explorer.MissionStartingStamina);
             SetText(explorerStaminaDecreaseInput, explorer.staminaDecreasePerSecond);
-            SetText(explorerStaminaRecoveryInput, explorer.staminaRecoveryPerSecond);
+            SetText(explorerStaminaRecoveryInput, explorer.MissionStartingRecoveryPerSecond);
             SetText(explorerRestartThresholdInput, explorer.restartThreshold);
             SetText(explorerMaxWalkableSlopeInput, explorer.maxWalkableSlope);
             SetText(explorerRecoveryDecayInput, explorer.recoveryDecay);
@@ -319,9 +319,20 @@ public class StartSettingsController : MonoBehaviour
         SetText(explorerMinTargetDistanceInput, minTargetDistance);
         explorer.moveSpeed = GetFloat(explorerMoveSpeedInput, explorer.moveSpeed, 0f, 1000f);
 
-        explorer.stamina = GetFloat(explorerStaminaInput, explorer.stamina, 0f, 100f);
+        float startingStamina = GetFloat(
+            explorerStaminaInput,
+            explorer.MissionStartingStamina,
+            0f,
+            100f
+        );
+        float startingRecovery = GetFloat(
+            explorerStaminaRecoveryInput,
+            explorer.MissionStartingRecoveryPerSecond,
+            0f,
+            1000f
+        );
+        explorer.ConfigureMissionStamina(startingStamina, startingRecovery);
         explorer.staminaDecreasePerSecond = GetFloat(explorerStaminaDecreaseInput, explorer.staminaDecreasePerSecond, 0f, 1000f);
-        explorer.staminaRecoveryPerSecond = GetFloat(explorerStaminaRecoveryInput, explorer.staminaRecoveryPerSecond, 0f, 1000f);
         explorer.restartThreshold = GetFloat(explorerRestartThresholdInput, explorer.restartThreshold, 0f, 100f);
         explorer.recoveryDecay = GetFloat(explorerRecoveryDecayInput, explorer.recoveryDecay, 0f, 100f);
 

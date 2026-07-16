@@ -8,6 +8,8 @@ using UnityEditor;
 [RequireComponent(typeof(CharacterController))]
 public class Explorer : MonoBehaviour
 {
+    private const int InitialSpawnClearancePassCount = 3;
+
     private CharacterController controller;//移動方法にCharacterController.Moveを採用
 
     [Header("Terrain")]
@@ -53,6 +55,9 @@ public class Explorer : MonoBehaviour
     public float staminaRecoveryPerSecond = 7f;     //体力回復速度
     public float recoveryDecay = 0.2f;              //疲労
     public float restartThreshold = 50f;  //休憩→移動への体力必要値
+    [System.NonSerialized] private bool missionStaminaBaselineCaptured;
+    [System.NonSerialized] private float missionStartingStamina;
+    [System.NonSerialized] private float missionStartingRecoveryPerSecond;
     private bool isResting = false;  //true:移動 false:休憩
     [SerializeField] private AnimationClip takingRestClip;
     [SerializeField] private string takingRestClipName = "TakingRest";
@@ -136,38 +141,42 @@ public class Explorer : MonoBehaviour
             }
 
             Vector3 terrainPosition = targetTerrain.transform.position;
-            for (int attempt = 0; attempt < Mathf.Max(1, initialSpawnMaxAttempts); attempt++)
+            for (int clearancePass = 0; clearancePass < InitialSpawnClearancePassCount; clearancePass++)
             {
-                float worldX = terrainPosition.x + Random.Range(effectiveMargin, size.x - effectiveMargin);
-                float worldZ = terrainPosition.z + Random.Range(effectiveMargin, size.z - effectiveMargin);
-                float y = targetTerrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPosition.y;
-                Vector3 candidate = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
-
-                float normalizedX = (candidate.x - terrainPosition.x) / size.x;
-                float normalizedZ = (candidate.z - terrainPosition.z) / size.z;
-                bool inside = normalizedX >= 0f && normalizedX <= 1f
-                    && normalizedZ >= 0f && normalizedZ <= 1f;
-                bool blocked = Physics.CheckSphere(
-                    candidate + Vector3.up,
-                    initialSpawnCheckRadius,
-                    obstacleMask,
-                    QueryTriggerInteraction.Collide);
-                float slope = Vector3.Angle(
-                    targetTerrain.terrainData.GetInterpolatedNormal(normalizedX, normalizedZ),
-                    Vector3.up);
-
-                if (!inside || blocked || slope > initialMaxSlope)
+                float treeClearance = GetInitialSpawnTreeClearance(clearancePass);
+                for (int attempt = 0; attempt < Mathf.Max(1, initialSpawnMaxAttempts); attempt++)
                 {
-                    continue;
-                }
-                if (targetForest != null
-                    && !targetForest.IsFarEnoughFromTrees(candidate, initialTreeDistance))
-                {
-                    continue;
-                }
+                    float worldX = terrainPosition.x + Random.Range(effectiveMargin, size.x - effectiveMargin);
+                    float worldZ = terrainPosition.z + Random.Range(effectiveMargin, size.z - effectiveMargin);
+                    float y = targetTerrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPosition.y;
+                    Vector3 candidate = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
 
-                spawnPosition = candidate;
-                return true;
+                    float normalizedX = (candidate.x - terrainPosition.x) / size.x;
+                    float normalizedZ = (candidate.z - terrainPosition.z) / size.z;
+                    bool inside = normalizedX >= 0f && normalizedX <= 1f
+                        && normalizedZ >= 0f && normalizedZ <= 1f;
+                    bool blocked = Physics.CheckSphere(
+                        candidate + Vector3.up,
+                        initialSpawnCheckRadius,
+                        obstacleMask,
+                        QueryTriggerInteraction.Collide);
+                    float slope = Vector3.Angle(
+                        targetTerrain.terrainData.GetInterpolatedNormal(normalizedX, normalizedZ),
+                        Vector3.up);
+
+                    if (!inside || blocked || slope > initialMaxSlope)
+                    {
+                        continue;
+                    }
+                    if (targetForest != null && treeClearance > 0f
+                        && !targetForest.IsFarEnoughFromTrees(candidate, treeClearance))
+                    {
+                        continue;
+                    }
+
+                    spawnPosition = candidate;
+                    return true;
+                }
             }
 
             Debug.LogError("[Explorer] Cannot find a safe spawn position; mission setup failed.", this);
@@ -201,6 +210,7 @@ public class Explorer : MonoBehaviour
         internal float AvoidTimer;
         internal Quaternion AvoidRotation;
         internal float Stamina;
+        internal float StaminaRecoveryPerSecond;
         internal bool IsResting;
         internal float LastDistanceToTarget;
         internal float StuckTimer;
@@ -226,7 +236,8 @@ public class Explorer : MonoBehaviour
             ConsecutiveTargetSearchFailures = consecutiveTargetSearchFailures,
             StoppedAfterDroneFound = stoppedAfterDroneFound, VerticalVelocity = verticalVelocity,
             IsAvoiding = isAvoiding, AvoidTimer = avoidTimer, AvoidRotation = avoidRotation,
-            Stamina = stamina, IsResting = isResting, LastDistanceToTarget = lastDistanceToTarget,
+            Stamina = stamina, StaminaRecoveryPerSecond = staminaRecoveryPerSecond,
+            IsResting = isResting, LastDistanceToTarget = lastDistanceToTarget,
             StuckTimer = stuckTimer, BlockedSlopeMap = blockedSlopeMap,
             SlopeResolution = slopeResolution, DroneAnnouncementTimer = droneAnnouncementTimer,
             NearestDrone = nearestDrone, ReadyForMission = readyForMission,
@@ -252,6 +263,7 @@ public class Explorer : MonoBehaviour
         avoidTimer = state.AvoidTimer;
         avoidRotation = state.AvoidRotation;
         stamina = state.Stamina;
+        staminaRecoveryPerSecond = state.StaminaRecoveryPerSecond;
         isResting = state.IsResting;
         lastDistanceToTarget = state.LastDistanceToTarget;
         stuckTimer = state.StuckTimer;
@@ -265,6 +277,23 @@ public class Explorer : MonoBehaviour
         terrainMargin = state.TerrainMargin;
         if (cc != null) cc.enabled = state.ControllerEnabled;
         enabled = state.Enabled;
+    }
+
+    public float MissionStartingStamina => missionStaminaBaselineCaptured
+        ? missionStartingStamina
+        : Mathf.Clamp(stamina, 0f, 100f);
+
+    public float MissionStartingRecoveryPerSecond => missionStaminaBaselineCaptured
+        ? missionStartingRecoveryPerSecond
+        : Mathf.Max(0f, staminaRecoveryPerSecond);
+
+    public void ConfigureMissionStamina(float startingStamina, float recoveryPerSecond)
+    {
+        missionStartingStamina = Mathf.Clamp(startingStamina, 0f, 100f);
+        missionStartingRecoveryPerSecond = Mathf.Max(0f, recoveryPerSecond);
+        missionStaminaBaselineCaptured = true;
+        stamina = missionStartingStamina;
+        staminaRecoveryPerSecond = missionStartingRecoveryPerSecond;
     }
 
     /// <summary>Applies a spawn that was successfully prepared against the committed world.</summary>
@@ -1113,34 +1142,39 @@ public class Explorer : MonoBehaviour
             return false;
         }
 
-        for (int attempt = 0; attempt < Mathf.Max(1, initialSpawnMaxAttempts); attempt++)
+        for (int clearancePass = 0; clearancePass < InitialSpawnClearancePassCount; clearancePass++)
         {
-            float randomX = Random.Range(effectiveMargin, terrainData.size.x - effectiveMargin);
-            float randomZ = Random.Range(effectiveMargin, terrainData.size.z - effectiveMargin);
+            float treeClearance = GetInitialSpawnTreeClearance(clearancePass);
+            for (int attempt = 0; attempt < Mathf.Max(1, initialSpawnMaxAttempts); attempt++)
+            {
+                float randomX = Random.Range(effectiveMargin, terrainData.size.x - effectiveMargin);
+                float randomZ = Random.Range(effectiveMargin, terrainData.size.z - effectiveMargin);
 
-            float worldX = terrainPos.x + randomX;
-            float worldZ = terrainPos.z + randomZ;
+                float worldX = terrainPos.x + randomX;
+                float worldZ = terrainPos.z + randomZ;
 
-            float y = terrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPos.y;
+                float y = terrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPos.y;
 
-            Vector3 candidatePosition = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
+                Vector3 candidatePosition = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
 
-            if (!IsInsideTerrain(candidatePosition)) continue;
+                if (!IsInsideTerrain(candidatePosition)) continue;
 
-            if (!IsValidInitialSpawnPoint(candidatePosition)) continue;
+                if (!IsValidInitialSpawnPoint(candidatePosition)) continue;
 
-            if (!IsSlopeValidForInitialSpawn(candidatePosition)) continue;
+                if (!IsSlopeValidForInitialSpawn(candidatePosition)) continue;
 
-            if(forestSpawner !=  null && !forestSpawner.IsFarEnoughFromTrees(candidatePosition, initialTreeDistance)) continue;
+                if (forestSpawner != null && treeClearance > 0f
+                    && !forestSpawner.IsFarEnoughFromTrees(candidatePosition, treeClearance)) continue;
 
-            if (cc != null) cc.enabled = false;
+                if (cc != null) cc.enabled = false;
 
-            transform.position = candidatePosition;
+                transform.position = candidatePosition;
 
-            if (cc != null) cc.enabled = true;
+                if (cc != null) cc.enabled = true;
 
-            Debug.Log("Explorer position set: " + candidatePosition);
-            return true;
+                Debug.Log("Explorer position set: " + candidatePosition);
+                return true;
+            }
         }
 
         Debug.LogError("[Explorer] Cannot find a safe spawn position; mission setup failed.", this);
@@ -1149,6 +1183,10 @@ public class Explorer : MonoBehaviour
 
     private void ResetMissionState()
     {
+        CaptureMissionStaminaBaselineIfNeeded();
+        stamina = missionStartingStamina;
+        staminaRecoveryPerSecond = missionStartingRecoveryPerSecond;
+
         // Make the previous run unusable before searching. A failed search must not
         // leave an old stopped/targeting state and transform available to a new run.
         readyForMission = false;
@@ -1176,6 +1214,35 @@ public class Explorer : MonoBehaviour
         nearestDrone = null;
         StopRestAnimation();
         SetIdleAnimation();
+    }
+
+    private void CaptureMissionStaminaBaselineIfNeeded()
+    {
+        if (missionStaminaBaselineCaptured)
+        {
+            return;
+        }
+
+        missionStartingStamina = Mathf.Clamp(stamina, 0f, 100f);
+        missionStartingRecoveryPerSecond = Mathf.Max(0f, staminaRecoveryPerSecond);
+        missionStaminaBaselineCaptured = true;
+    }
+
+    private float GetInitialSpawnTreeClearance(int clearancePass)
+    {
+        if (clearancePass <= 0)
+        {
+            return Mathf.Max(0f, initialTreeDistance);
+        }
+
+        if (clearancePass == 1)
+        {
+            return Mathf.Max(0f, initialTreeDistance * 0.5f);
+        }
+
+        // The physics overlap and slope checks still enforce actual safety. This final
+        // pass only drops the extra comfort radius that can cover an entire small map.
+        return 0f;
     }
 
     bool IsValidInitialSpawnPoint(Vector3 point)
