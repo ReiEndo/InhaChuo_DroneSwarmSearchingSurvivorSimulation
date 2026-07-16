@@ -3,11 +3,12 @@ using System.Runtime.InteropServices;
 
 public static class DroneNative
 {
-#if UNITY_WEBGL && !UNITY_EDITOR
-    private const string LibName = "__Internal";
-#else
+#if UNITY_EDITOR_WIN || UNITY_EDITOR_LINUX || UNITY_EDITOR_OSX || UNITY_STANDALONE_WIN || UNITY_STANDALONE_LINUX || UNITY_STANDALONE_OSX
     private const string LibName = "drone_algo";
 #endif
+
+    private const string UnsupportedPlatformMessage =
+        "Drone native algorithms are supported only on Windows x86-64, Linux x86-64, and macOS ARM64.";
 
     [StructLayout(LayoutKind.Sequential)]
     public struct DroneVec3i
@@ -105,6 +106,7 @@ public static class DroneNative
         int outCapacity
     )
     {
+        EnsureSupportedPlatform();
         ValidatePlannerInput(plannerType, width, height, depth, knownCells, knownStates, knownCount, outPath, outCapacity);
 
         return DronePlanKnownPathNative(
@@ -133,6 +135,7 @@ public static class DroneNative
         out DroneVec3f outVelocity
     )
     {
+        EnsureSupportedPlatform();
         ValidateAvoidanceInput(selfRadius, maxSpeed, timeHorizonSeconds, neighbors, neighborCount);
 
         return DroneComputeLocalAvoidanceVelocityNative(
@@ -164,6 +167,7 @@ public static class DroneNative
         int outCapacity
     )
     {
+        EnsureSupportedPlatform();
         ValidateFrontierRankingInput(
             width,
             height,
@@ -295,6 +299,39 @@ public static class DroneNative
         return !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
+    private static void EnsureSupportedPlatform()
+    {
+#if UNITY_EDITOR_WIN || UNITY_EDITOR_LINUX
+        if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+        {
+            return;
+        }
+#elif UNITY_EDITOR_OSX
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            return;
+        }
+#elif UNITY_STANDALONE_WIN || UNITY_STANDALONE_LINUX
+        if (RuntimeInformation.ProcessArchitecture == Architecture.X64)
+        {
+            return;
+        }
+#elif UNITY_STANDALONE_OSX
+        if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+        {
+            return;
+        }
+#endif
+
+        ThrowUnsupportedPlatform();
+    }
+
+    private static int ThrowUnsupportedPlatform()
+    {
+        throw new PlatformNotSupportedException(UnsupportedPlatformMessage);
+    }
+
+#if UNITY_EDITOR_WIN || UNITY_EDITOR_LINUX || UNITY_EDITOR_OSX || UNITY_STANDALONE_WIN || UNITY_STANDALONE_LINUX || UNITY_STANDALONE_OSX
     [DllImport(LibName, EntryPoint = "DronePlanKnownPath", CallingConvention = CallingConvention.Cdecl)]
     private static extern int DronePlanKnownPathNative(
         int plannerType,
@@ -339,4 +376,57 @@ public static class DroneNative
         [Out] DroneFrontierCandidate[] outCandidates,
         int outCapacity
     );
+#else
+    private static int DronePlanKnownPathNative(
+        int plannerType,
+        int width,
+        int height,
+        int depth,
+        DroneVec3i start,
+        DroneVec3i goal,
+        DroneVec3i[] knownCells,
+        int[] knownStates,
+        int knownCount,
+        DroneVec3i[] outPath,
+        int outCapacity
+    )
+    {
+        return ThrowUnsupportedPlatform();
+    }
+
+    private static int DroneComputeLocalAvoidanceVelocityNative(
+        DroneVec3f selfPosition,
+        DroneVec3f preferredVelocity,
+        float selfRadius,
+        float maxSpeed,
+        float timeHorizonSeconds,
+        DroneNeighborState[] neighbors,
+        int neighborCount,
+        out DroneVec3f outVelocity
+    )
+    {
+        outVelocity = default;
+        return ThrowUnsupportedPlatform();
+    }
+
+    private static int DroneRankFrontierCandidatesNative(
+        int width,
+        int height,
+        int depth,
+        DroneVec3i start,
+        DroneVec3i[] knownCells,
+        int[] knownStates,
+        int knownCount,
+        DroneVec3i[] recentGoalCells,
+        int recentGoalCount,
+        DroneVec3i[] occupiedGoalCells,
+        int occupiedGoalCount,
+        DroneFrontierScoringSettings settings,
+        DroneFrontierCandidate[] outCandidates,
+        int outCapacity
+    )
+    {
+        return ThrowUnsupportedPlatform();
+    }
+#endif
 }

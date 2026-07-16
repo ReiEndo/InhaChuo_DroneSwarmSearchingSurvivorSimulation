@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.SceneManagement;
 using TMPro;
 
 public class GameFlowController : MonoBehaviour
@@ -58,6 +57,8 @@ public class GameFlowController : MonoBehaviour
 
     private bool gameRunning;
     private bool resultShown;
+    private bool startInProgress;
+    private bool pendingStartWasReplay;
 
     private GameEndReason endReason = GameEndReason.None;
 
@@ -75,16 +76,85 @@ public class GameFlowController : MonoBehaviour
 
     public void OnClickStart()
     {
-        if(startSettingsController != null)
+        if (gameRunning || startInProgress)
+        {
+            return;
+        }
+
+        if (startSettingsController != null)
         {
             startSettingsController.ApplySettings();
         }
-        StartGame();
 
-        if (scriptsControl != null)
+        pendingStartWasReplay = resultShown;
+        startInProgress = true;
+        bool accepted = scriptsControl != null
+            && (pendingStartWasReplay
+                ? scriptsControl.TryStartNewSimulationAsync(OnSimulationStartCompleted)
+                : scriptsControl.TryStartSimulationAsync(OnSimulationStartCompleted));
+
+        // Rejections normally invoke the callback synchronously. This fallback also
+        // covers a missing ScriptsControl reference.
+        if (!accepted && startInProgress)
         {
-            scriptsControl.StartSimulation();
+            OnSimulationStartCompleted(false, "Simulation startup request was rejected.");
         }
+    }
+
+    private void OnSimulationStartCompleted(bool succeeded, string error)
+    {
+        if (!startInProgress)
+        {
+            return;
+        }
+
+        bool replay = pendingStartWasReplay;
+        startInProgress = false;
+        pendingStartWasReplay = false;
+
+        if (!succeeded)
+        {
+            Debug.LogError($"[GameFlowController] Simulation setup failed; gameplay was not started. {error}", this);
+            gameRunning = false;
+            // Preserve resultShown for a failed replay so another click still takes
+            // the explicit new-game path.
+            resultShown = replay;
+            if (isActiveAndEnabled && gameObject.activeInHierarchy)
+            {
+                ShowStartScreen();
+            }
+            return;
+        }
+
+        // Auto-start batch runners own their mission lifecycle asynchronously. Do not
+        // start a GameFlow timeout for a run that this controller did not launch.
+        if (scriptsControl.BatchAutoStartEnabled)
+        {
+            ShowStartScreen();
+            return;
+        }
+
+        if (!isActiveAndEnabled || !gameObject.activeInHierarchy)
+        {
+            scriptsControl.CancelPendingStart("GameFlowController became inactive after startup.");
+            return;
+        }
+
+        StartGame();
+    }
+
+    private void OnDisable()
+    {
+        if (!startInProgress)
+        {
+            return;
+        }
+
+        // CancelQueuedReset reports failure synchronously. Leave the guard set until
+        // that callback has observed the cancellation.
+        scriptsControl?.CancelPendingStart("GameFlowController became inactive before startup completed.");
+        startInProgress = false;
+        pendingStartWasReplay = false;
     }
 
     private void StartGame()
@@ -268,29 +338,37 @@ public class GameFlowController : MonoBehaviour
 
     public void ForceEnd()
     {
+        TryHandleTelemetryTimeout();
+    }
+
+    /// <summary>
+    /// Ends an actively owned interactive run at an external simulation timeout.
+    /// GameFlow remains authoritative for the search-versus-return timeout reason.
+    /// </summary>
+    public bool TryHandleTelemetryTimeout()
+    {
+        if (!gameRunning || resultShown)
+        {
+            return false;
+        }
+
+        TrySyncFoundTimeFromDroneReports();
+        droneReturnTime = -1f;
+        EndGame(foundTime < 0f
+            ? GameEndReason.SearchTimeout
+            : GameEndReason.DroneReturnTimeout);
+        return true;
+    }
+
+    private void EndGame(GameEndReason reason)
+    {
+        // EndGame can be reached by UI, timeout, and drone callbacks in the same frame.
+        // The first result is authoritative; later notifications must not replace it.
         if (!gameRunning || resultShown)
         {
             return;
         }
 
-        TrySyncFoundTimeFromDroneReports();
-
-        if (foundTime < 0f)
-        {
-            // まだ発見していないなら、探索失敗扱い
-            droneReturnTime = -1f;
-            EndGame(GameEndReason.SearchTimeout);
-        }
-        else
-        {
-            // 発見済みなら、回収失敗扱い
-            droneReturnTime = -1f;
-            EndGame(GameEndReason.DroneReturnTimeout);
-        }
-    }
-
-    private void EndGame(GameEndReason reason)
-    {
         // 終了直前にもDrone側の発見情報を確認する
         bool explorerFound = TrySyncFoundTimeFromDroneReports();
 
@@ -305,13 +383,54 @@ public class GameFlowController : MonoBehaviour
         endReason = reason;
         gameEndTime = Time.time - gameStartTime;
 
+        StopSimulation(reason);
         ShowResultScreen();
+    }
+
+    private void StopSimulation(GameEndReason reason)
+    {
+        DroneSwarmDemoBootstrap bootstrap = scriptsControl != null
+            ? scriptsControl.droneSwarmDemoBootstrap
+            : null;
+
+        if (bootstrap == null)
+        {
+            bootstrap = FindAnyObjectByType<DroneSwarmDemoBootstrap>();
+        }
+
+        if (bootstrap != null)
+        {
+            bootstrap.StopSimulation(GetTelemetryEndReason(reason), reason == GameEndReason.Success);
+        }
+    }
+
+    private static string GetTelemetryEndReason(GameEndReason reason)
+    {
+        switch (reason)
+        {
+            case GameEndReason.Success:
+                return "mission_complete";
+            case GameEndReason.SearchTimeout:
+                return "search_timeout";
+            case GameEndReason.DroneReturnTimeout:
+                return "drone_return_timeout";
+            case GameEndReason.Forced:
+                return "forced";
+            default:
+                return "ended";
+        }
     }
 
     public void OnClickBackToTitle()
     {
-        // 完全に初期状態へ戻したいならScene再読み込みが一番安全
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        if (gameRunning)
+        {
+            return;
+        }
+
+        // Keep the stopped result world intact for result rendering. The next Start
+        // click is the explicit boundary that safely rebuilds it in this scene.
+        ShowStartScreen();
     }
 
     private void ShowStartScreen()

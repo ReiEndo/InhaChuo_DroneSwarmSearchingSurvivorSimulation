@@ -25,12 +25,16 @@ public class Explorer : MonoBehaviour
     public float obstacleAvoidAngle = 55f;      //回避時に左右へ曲がる角度
     private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
     public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
-    //[SerializeField] private int maxTargetSearchAttemptsPerFrame = 32;
+    [SerializeField] private int targetSearchAttempts = 32;
     [SerializeField] private int fallbackTargetSearchAttempts = 96;
     [SerializeField] private float fallbackMinTargetDistance = 3f;
+    [SerializeField] private float targetSearchRetryInitialDelay = 0.25f;
+    [SerializeField] private float targetSearchRetryMaxDelay = 2f;
 
     private Vector3 targetPosition;     //目標地点
     private bool hasTarget = false;     //目標地点が定まっているか
+    private float nextTargetSearchAt;
+    private int consecutiveTargetSearchFailures;
 
     [Header("ドローン発見後")]
     private bool stoppedAfterDroneFound; //ドローンに発見されたら停止
@@ -80,6 +84,7 @@ public class Explorer : MonoBehaviour
     public float droneHearingDistance = 10f;
     private float droneAnnouncementTimer = 0f;
     private Transform nearestDrone;
+    private bool readyForMission;
 
     /*
     Scripts\ScriptControl\ScriptsControl.csにて制御
@@ -96,8 +101,198 @@ public class Explorer : MonoBehaviour
 
     [SerializeField] private Animator animator;
 
-    public void ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
+    /// <summary>
+    /// Finds a spawn against a staged world without changing this explorer's transform,
+    /// enabled state, controller, or mission state.
+    /// </summary>
+    public bool TryPrepareExplorerSpawn(
+        Terrain targetTerrain,
+        ForestSpawner targetForest,
+        out Vector3 spawnPosition)
     {
+        spawnPosition = default;
+        if (targetTerrain == null || targetTerrain.terrainData == null)
+        {
+            Debug.LogError("[Explorer] A Terrain with TerrainData is required.", this);
+            return false;
+        }
+
+        float originalScanRadius = scanRadius;
+        float originalMinTargetDistance = minTargetDistance;
+        float originalTerrainMargin = terrainMargin;
+        try
+        {
+            Vector3 size = targetTerrain.terrainData.size;
+            if (!ValidateConfigurationForTerrain(size.x, size.z, false))
+            {
+                return false;
+            }
+
+            float effectiveMargin = EffectiveTerrainMargin;
+            if (size.x <= effectiveMargin * 2f || size.z <= effectiveMargin * 2f)
+            {
+                Debug.LogError("[Explorer] Terrain has no spawnable area after applying explorer clearance.", this);
+                return false;
+            }
+
+            Vector3 terrainPosition = targetTerrain.transform.position;
+            for (int attempt = 0; attempt < Mathf.Max(1, initialSpawnMaxAttempts); attempt++)
+            {
+                float worldX = terrainPosition.x + Random.Range(effectiveMargin, size.x - effectiveMargin);
+                float worldZ = terrainPosition.z + Random.Range(effectiveMargin, size.z - effectiveMargin);
+                float y = targetTerrain.SampleHeight(new Vector3(worldX, 0f, worldZ)) + terrainPosition.y;
+                Vector3 candidate = new Vector3(worldX, y + initialSpawnYOffset, worldZ);
+
+                float normalizedX = (candidate.x - terrainPosition.x) / size.x;
+                float normalizedZ = (candidate.z - terrainPosition.z) / size.z;
+                bool inside = normalizedX >= 0f && normalizedX <= 1f
+                    && normalizedZ >= 0f && normalizedZ <= 1f;
+                bool blocked = Physics.CheckSphere(
+                    candidate + Vector3.up,
+                    initialSpawnCheckRadius,
+                    obstacleMask,
+                    QueryTriggerInteraction.Collide);
+                float slope = Vector3.Angle(
+                    targetTerrain.terrainData.GetInterpolatedNormal(normalizedX, normalizedZ),
+                    Vector3.up);
+
+                if (!inside || blocked || slope > initialMaxSlope)
+                {
+                    continue;
+                }
+                if (targetForest != null
+                    && !targetForest.IsFarEnoughFromTrees(candidate, initialTreeDistance))
+                {
+                    continue;
+                }
+
+                spawnPosition = candidate;
+                return true;
+            }
+
+            Debug.LogError("[Explorer] Cannot find a safe spawn position; mission setup failed.", this);
+            return false;
+        }
+        finally
+        {
+            // Validation may clamp these values. They belong to the retained explorer
+            // until the staged world is committed.
+            scanRadius = originalScanRadius;
+            minTargetDistance = originalMinTargetDistance;
+            terrainMargin = originalTerrainMargin;
+        }
+    }
+
+    public sealed class ReplayState
+    {
+        internal Terrain Terrain;
+        internal ForestSpawner Forest;
+        internal Vector3 Position;
+        internal Quaternion Rotation;
+        internal bool Enabled;
+        internal bool ControllerEnabled;
+        internal Vector3 TargetPosition;
+        internal bool HasTarget;
+        internal float NextTargetSearchAt;
+        internal int ConsecutiveTargetSearchFailures;
+        internal bool StoppedAfterDroneFound;
+        internal float VerticalVelocity;
+        internal bool IsAvoiding;
+        internal float AvoidTimer;
+        internal Quaternion AvoidRotation;
+        internal float Stamina;
+        internal bool IsResting;
+        internal float LastDistanceToTarget;
+        internal float StuckTimer;
+        internal bool[,] BlockedSlopeMap;
+        internal int SlopeResolution;
+        internal float DroneAnnouncementTimer;
+        internal Transform NearestDrone;
+        internal bool ReadyForMission;
+        internal float ScanRadius;
+        internal float MinTargetDistance;
+        internal float TerrainMargin;
+    }
+
+    public ReplayState CaptureReplayState()
+    {
+        CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
+        return new ReplayState
+        {
+            Terrain = terrain, Forest = forestSpawner, Position = transform.position,
+            Rotation = transform.rotation, Enabled = enabled,
+            ControllerEnabled = cc != null && cc.enabled, TargetPosition = targetPosition,
+            HasTarget = hasTarget, NextTargetSearchAt = nextTargetSearchAt,
+            ConsecutiveTargetSearchFailures = consecutiveTargetSearchFailures,
+            StoppedAfterDroneFound = stoppedAfterDroneFound, VerticalVelocity = verticalVelocity,
+            IsAvoiding = isAvoiding, AvoidTimer = avoidTimer, AvoidRotation = avoidRotation,
+            Stamina = stamina, IsResting = isResting, LastDistanceToTarget = lastDistanceToTarget,
+            StuckTimer = stuckTimer, BlockedSlopeMap = blockedSlopeMap,
+            SlopeResolution = slopeResolution, DroneAnnouncementTimer = droneAnnouncementTimer,
+            NearestDrone = nearestDrone, ReadyForMission = readyForMission,
+            ScanRadius = scanRadius, MinTargetDistance = minTargetDistance, TerrainMargin = terrainMargin
+        };
+    }
+
+    public void RestoreReplayState(ReplayState state)
+    {
+        if (state == null) return;
+        CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
+        if (cc != null) cc.enabled = false;
+        terrain = state.Terrain;
+        forestSpawner = state.Forest;
+        transform.SetPositionAndRotation(state.Position, state.Rotation);
+        targetPosition = state.TargetPosition;
+        hasTarget = state.HasTarget;
+        nextTargetSearchAt = state.NextTargetSearchAt;
+        consecutiveTargetSearchFailures = state.ConsecutiveTargetSearchFailures;
+        stoppedAfterDroneFound = state.StoppedAfterDroneFound;
+        verticalVelocity = state.VerticalVelocity;
+        isAvoiding = state.IsAvoiding;
+        avoidTimer = state.AvoidTimer;
+        avoidRotation = state.AvoidRotation;
+        stamina = state.Stamina;
+        isResting = state.IsResting;
+        lastDistanceToTarget = state.LastDistanceToTarget;
+        stuckTimer = state.StuckTimer;
+        blockedSlopeMap = state.BlockedSlopeMap;
+        slopeResolution = state.SlopeResolution;
+        droneAnnouncementTimer = state.DroneAnnouncementTimer;
+        nearestDrone = state.NearestDrone;
+        readyForMission = state.ReadyForMission;
+        scanRadius = state.ScanRadius;
+        minTargetDistance = state.MinTargetDistance;
+        terrainMargin = state.TerrainMargin;
+        if (cc != null) cc.enabled = state.ControllerEnabled;
+        enabled = state.Enabled;
+    }
+
+    /// <summary>Applies a spawn that was successfully prepared against the committed world.</summary>
+    public void CommitPreparedExplorerSpawn(
+        Terrain targetTerrain,
+        ForestSpawner targetForest,
+        Vector3 spawnPosition)
+    {
+        ResetMissionState();
+        terrain = targetTerrain;
+        forestSpawner = targetForest;
+        animator = animator != null ? animator : GetComponentInChildren<Animator>();
+        ResolveTakingRestClip();
+        controller = GetComponent<CharacterController>();
+        ValidateConfigurationForTerrain(targetTerrain.terrainData.size.x, targetTerrain.terrainData.size.z);
+        if (controller != null) controller.enabled = false;
+        transform.position = spawnPosition;
+        if (controller != null) controller.enabled = true;
+        BuildSlopeMap();
+        lastDistanceToTarget = 0f;
+        readyForMission = true;
+        enabled = true;
+    }
+
+    public bool ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
+    {
+        ResetMissionState();
+
         if (animator == null)
         {
             animator = GetComponentInChildren<Animator>();
@@ -106,10 +301,30 @@ public class Explorer : MonoBehaviour
 
         controller = GetComponent<CharacterController>();
 
-        TeleportToRandomInitialPosition();
+        Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
+        if (targetTerrain == null || targetTerrain.terrainData == null)
+        {
+            Debug.LogError("[Explorer] A Terrain with TerrainData is required.", this);
+            return false;
+        }
+
+        terrain = targetTerrain;
+        Vector3 terrainSize = targetTerrain.terrainData.size;
+        if (!ValidateConfigurationForTerrain(terrainSize.x, terrainSize.z))
+        {
+            return false;
+        }
+
+        if (!TryTeleportToRandomInitialPosition())
+        {
+            return false;
+        }
 
         BuildSlopeMap();
         lastDistanceToTarget = 0f;
+        readyForMission = true;
+        enabled = true;
+        return true;
     }
 
     void Update() //フレームごとの更新
@@ -137,22 +352,22 @@ public class Explorer : MonoBehaviour
             return;
         }
 
-        // Bounded retry per frame: if no valid target is found this frame, give up
-        // for now and try again next frame. Previously this was an unbounded
-        // `while (!hasTarget)` busy-wait that froze the main thread whenever every
-        // random candidate was blocked (e.g. explorer boxed in by trees after a
-        // batch run respawned it into a freshly forested world).
-        const int maxTargetSearchAttemptsPerFrame = 32;
-        int attemptsThisFrame = 0;
-        while (!hasTarget && attemptsThisFrame < maxTargetSearchAttemptsPerFrame)
+        if (!hasTarget && Time.time >= nextTargetSearchAt)
         {
-            TryFindUnknownTarget();
-            attemptsThisFrame++;
+            if (TryFindUnknownTarget())
+            {
+                ResetTargetSearchBackoff();
+            }
+            else
+            {
+                ScheduleTargetSearchRetry();
+            }
         }
 
         if (!hasTarget)
         {
-            // Could not find a valid target this frame; stay idle and retry next frame.
+            // No terrain-safe target currently exists. Remain idle until the bounded
+            // search is retried instead of repeating its expensive slope checks every frame.
             SetIdleAnimation();
             return;
         }
@@ -162,6 +377,86 @@ public class Explorer : MonoBehaviour
     }
 
     public bool IsStoppedAfterDroneFound => stoppedAfterDroneFound;
+    public bool IsReadyForMission => readyForMission;
+
+    public float EffectiveTerrainMargin
+    {
+        get
+        {
+            CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
+            float controllerRadius = cc != null ? cc.radius : 0f;
+            return Mathf.Max(0f, terrainMargin, controllerRadius, initialSpawnCheckRadius);
+        }
+    }
+
+    public int GetMinimumTerrainDimension()
+    {
+        return GetMinimumTerrainDimension(EffectiveTerrainMargin, minTargetDistance, scanRadius);
+    }
+
+    public static int GetMinimumTerrainDimension(
+        float effectiveMargin,
+        float requestedMinTargetDistance,
+        float requestedScanRadius
+    )
+    {
+        float safeScanRadius = Mathf.Max(0.1f, requestedScanRadius);
+        float safeMinTargetDistance = Mathf.Clamp(requestedMinTargetDistance, 0f, safeScanRadius);
+        return Mathf.CeilToInt(2f * (Mathf.Max(0f, effectiveMargin) + safeMinTargetDistance) + 1f);
+    }
+
+    public bool ValidateConfigurationForTerrain(float terrainWidth, float terrainDepth, bool logChanges = true)
+    {
+        float oldScanRadius = scanRadius;
+        float oldMinTargetDistance = minTargetDistance;
+        float oldTerrainMargin = terrainMargin;
+
+        scanRadius = Mathf.Max(0.1f, scanRadius);
+        minTargetDistance = Mathf.Clamp(minTargetDistance, 0f, scanRadius);
+
+        CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
+        float controllerRadius = cc != null ? cc.radius : 0f;
+        float fixedClearance = Mathf.Max(controllerRadius, initialSpawnCheckRadius, 0f);
+        float halfShortestSide = Mathf.Min(terrainWidth, terrainDepth) * 0.5f;
+
+        if (halfShortestSide <= fixedClearance)
+        {
+            Debug.LogError(
+                $"[Explorer] Terrain {terrainWidth:0.###} x {terrainDepth:0.###} is too small "
+                + $"for explorer clearance {fixedClearance:0.###}.",
+                this
+            );
+            return false;
+        }
+
+        // Leave a non-zero interior so Random.Range never receives an empty span.
+        terrainMargin = Mathf.Clamp(terrainMargin, 0f, halfShortestSide - 0.01f);
+        float availableTargetRadius = halfShortestSide - EffectiveTerrainMargin;
+        scanRadius = Mathf.Clamp(scanRadius, 0.1f, Mathf.Max(0.1f, availableTargetRadius));
+        minTargetDistance = Mathf.Clamp(minTargetDistance, 0f, scanRadius);
+
+        if (logChanges && (
+            !Mathf.Approximately(oldScanRadius, scanRadius)
+            || !Mathf.Approximately(oldMinTargetDistance, minTargetDistance)
+            || !Mathf.Approximately(oldTerrainMargin, terrainMargin)))
+        {
+            Debug.LogWarning(
+                $"[Explorer] Adjusted settings for terrain {terrainWidth:0.###} x {terrainDepth:0.###}: "
+                + $"margin {oldTerrainMargin:0.###}->{terrainMargin:0.###}, "
+                + $"scanRadius {oldScanRadius:0.###}->{scanRadius:0.###}, "
+                + $"minTargetDistance {oldMinTargetDistance:0.###}->{minTargetDistance:0.###}.",
+                this
+            );
+        }
+
+        return true;
+    }
+
+    /// <summary>Clears runtime mission state created by a startup that did not commit.</summary>
+    public void RollbackFailedStartup()
+    {
+        ResetMissionState();
+    }
 
     public void StopAfterFoundByDrone()
     {
@@ -287,6 +582,7 @@ public class Explorer : MonoBehaviour
         {
             targetPosition = target;
             hasTarget = true;
+            ResetTargetSearchBackoff();
         }
     }
 
@@ -358,104 +654,144 @@ public class Explorer : MonoBehaviour
         isAvoiding = true;
     }
 
-    void TryFindUnknownTarget() //目標地点決定
+    bool TryFindUnknownTarget() //目標地点決定
     {
         Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
-        if (targetTerrain == null)
+        if (targetTerrain == null || targetTerrain.terrainData == null)
         {
             LogTargetSearchFailure(0, 0, 0, 0, "no terrain");
-            return;
+            return false;
         }
 
         terrain = targetTerrain;
-        //int attempts = Mathf.Max(1, maxTargetSearchAttemptsPerFrame);
+        int primaryAttempts = Mathf.Max(0, targetSearchAttempts);
+        int fallbackAttempts = Mathf.Max(0, fallbackTargetSearchAttempts);
         int outsideTerrainCount = 0;
         int obstacleBlockedCount = 0;
         int slopeBlockedCount = 0;
         float centerSteerWeight = GetCenterSteerWeight(targetTerrain);
         Vector3 centerDirection = GetTerrainCenterDirection(targetTerrain);
 
-    
-        float angle = Random.Range(-60f, 60f);
-        Vector3 dir = Quaternion.Euler(0, angle, 0) * transform.forward;
-        dir.y = 0f;
+        // Prefer continuing roughly forward so normal wandering keeps its existing character.
+        for (int attempt = 0; attempt < primaryAttempts; attempt++)
+        {
+            float angle = Random.Range(-60f, 60f);
+            Vector3 direction = Quaternion.Euler(0f, angle, 0f) * transform.forward;
+            if (TrySetTarget(
+                targetTerrain,
+                direction,
+                minTargetDistance,
+                centerSteerWeight,
+                centerDirection,
+                ref outsideTerrainCount,
+                ref obstacleBlockedCount,
+                ref slopeBlockedCount))
+            {
+                return true;
+            }
+        }
+
+        // If the forward cone is blocked, search all directions with a shorter allowed
+        // distance. This fallback was previously below an unconditional return.
+        float fallbackDistance = Mathf.Clamp(fallbackMinTargetDistance, 0.5f, scanRadius);
+        for (int attempt = 0; attempt < fallbackAttempts; attempt++)
+        {
+            float angle = Random.Range(0f, 360f);
+            Vector3 direction = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
+            if (TrySetTarget(
+                targetTerrain,
+                direction,
+                fallbackDistance,
+                centerSteerWeight,
+                centerDirection,
+                ref outsideTerrainCount,
+                ref obstacleBlockedCount,
+                ref slopeBlockedCount))
+            {
+                return true;
+            }
+        }
+
+        LogTargetSearchFailure(
+            primaryAttempts + fallbackAttempts,
+            outsideTerrainCount,
+            obstacleBlockedCount,
+            slopeBlockedCount
+        );
+        return false;
+    }
+
+    bool TrySetTarget(
+        Terrain targetTerrain,
+        Vector3 direction,
+        float requestedMinDistance,
+        float centerSteerWeight,
+        Vector3 centerDirection,
+        ref int outsideTerrainCount,
+        ref int obstacleBlockedCount,
+        ref int slopeBlockedCount
+    )
+    {
+        direction.y = 0f;
+        if (direction.sqrMagnitude <= 0.0001f)
+        {
+            direction = centerDirection.sqrMagnitude > 0.0001f ? centerDirection : Vector3.forward;
+        }
+        else
+        {
+            direction.Normalize();
+        }
 
         if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
         {
-            dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
+            direction = Vector3.Slerp(direction, centerDirection, centerSteerWeight).normalized;
         }
 
-        float distance = Random.Range(minTargetDistance, scanRadius);
-
-        Vector3 target = transform.position + dir * distance;
-
+        float maxDistance = Mathf.Max(0.1f, scanRadius);
+        float minDistance = Mathf.Clamp(requestedMinDistance, 0f, maxDistance);
+        float distance = Random.Range(minDistance, maxDistance);
+        Vector3 target = transform.position + direction * distance;
         target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
 
         if (!IsInsideTerrain(target))
         {
             outsideTerrainCount++;
-            return;
+            return false;
         }
 
         if (!IsValidPoint(target))
         {
             obstacleBlockedCount++;
-            return;
+            return false;
         }
 
         if (CrossBlockedSlope(transform.position, target))
         {
             slopeBlockedCount++;
-            return;
+            return false;
         }
 
         hasTarget = true;
         targetPosition = target;
         lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
         stuckTimer = 0f;
-        return;
-        
+        return true;
+    }
 
+    void ScheduleTargetSearchRetry()
+    {
+        consecutiveTargetSearchFailures++;
+        float initialDelay = Mathf.Max(0.02f, targetSearchRetryInitialDelay);
+        float maxDelay = Mathf.Max(initialDelay, targetSearchRetryMaxDelay);
+        int exponent = Mathf.Min(consecutiveTargetSearchFailures - 1, 8);
+        float delay = Mathf.Min(maxDelay, initialDelay * Mathf.Pow(2f, exponent));
+        nextTargetSearchAt = Time.time + delay;
+    }
 
-        angle = Random.Range(0f, 360f);
-        dir = Quaternion.Euler(0f, angle, 0f) * Vector3.forward;
-
-        if (centerSteerWeight > 0f && centerDirection.sqrMagnitude > 0.0001f)
-        {
-            dir = Vector3.Slerp(dir.normalized, centerDirection, centerSteerWeight);
-        }
-
-        float minDistance = Mathf.Clamp(fallbackMinTargetDistance, 0.5f, scanRadius);
-        distance = Random.Range(minDistance, scanRadius);
-        target = transform.position + dir * distance;
-
-        target.y = targetTerrain.SampleHeight(target) + targetTerrain.transform.position.y;
-
-        if (!IsInsideTerrain(target))
-        {
-            outsideTerrainCount++;
-            return;
-        }
-
-        if (!IsValidPoint(target))
-        {
-            obstacleBlockedCount++;
-            return;
-        }
-
-        if (CrossBlockedSlope(transform.position, target))
-        {
-            slopeBlockedCount++;
-            return;
-        }
-
-        hasTarget = true;
-        targetPosition = target;
-        lastDistanceToTarget = Vector3.Distance(transform.position, targetPosition);
-        stuckTimer = 0f;
-        return;
-
-        //LogTargetSearchFailure(attempts + fallbackAttempts, outsideTerrainCount, obstacleBlockedCount, slopeBlockedCount);
+    void ResetTargetSearchBackoff()
+    {
+        consecutiveTargetSearchFailures = 0;
+        nextTargetSearchAt = 0f;
     }
 
     float GetCenterSteerWeight(Terrain targetTerrain)
@@ -467,10 +803,11 @@ public class Explorer : MonoBehaviour
 
         Vector3 terrainPos = targetTerrain.transform.position;
         Vector3 terrainSize = targetTerrain.terrainData.size;
-        float minX = terrainPos.x + terrainMargin;
-        float maxX = terrainPos.x + terrainSize.x - terrainMargin;
-        float minZ = terrainPos.z + terrainMargin;
-        float maxZ = terrainPos.z + terrainSize.z - terrainMargin;
+        float effectiveMargin = EffectiveTerrainMargin;
+        float minX = terrainPos.x + effectiveMargin;
+        float maxX = terrainPos.x + terrainSize.x - effectiveMargin;
+        float minZ = terrainPos.z + effectiveMargin;
+        float maxZ = terrainPos.z + terrainSize.z - effectiveMargin;
 
         float distanceToInnerEdge = Mathf.Min(
             transform.position.x - minX,
@@ -535,13 +872,14 @@ public class Explorer : MonoBehaviour
 
         Vector3 terrainSize = targetTerrain.terrainData.size;
 
+        float effectiveMargin = EffectiveTerrainMargin;
         bool insideX =
-            point.x >= terrainPos.x + terrainMargin &&
-            point.x <= terrainPos.x + terrainSize.x - terrainMargin;
+            point.x >= terrainPos.x + effectiveMargin &&
+            point.x <= terrainPos.x + terrainSize.x - effectiveMargin;
 
         bool insideZ =
-            point.z >= terrainPos.z + terrainMargin &&
-            point.z <= terrainPos.z + terrainSize.z - terrainMargin;
+            point.z >= terrainPos.z + effectiveMargin &&
+            point.z <= terrainPos.z + terrainSize.z - effectiveMargin;
 
         return insideX && insideZ;
     }
@@ -740,13 +1078,26 @@ public class Explorer : MonoBehaviour
     }
 
     /*Explorer初期位置テレポート*/
-    public void TeleportToRandomInitialPosition()
+    public bool TeleportToRandomInitialPosition()
+    {
+        ResetMissionState();
+        if (!TryTeleportToRandomInitialPosition())
+        {
+            return false;
+        }
+
+        readyForMission = true;
+        enabled = true;
+        return true;
+    }
+
+    private bool TryTeleportToRandomInitialPosition()
     {
         Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
-        if(targetTerrain == null)
+        if(targetTerrain == null || targetTerrain.terrainData == null)
         {
             Debug.LogError("[Explorer.cs:Set Terrain on Explorers Inspector]");
-            return;
+            return false;
         }
 
         terrain = targetTerrain;
@@ -754,11 +1105,18 @@ public class Explorer : MonoBehaviour
         Vector3 terrainPos = terrain.transform.position;
 
         CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
+        float effectiveMargin = EffectiveTerrainMargin;
 
-        for (int attempt = 0; attempt < initialSpawnMaxAttempts; attempt++)
+        if (terrainData.size.x <= effectiveMargin * 2f || terrainData.size.z <= effectiveMargin * 2f)
         {
-            float randomX = Random.Range(terrainMargin, terrainData.size.x - terrainMargin);
-            float randomZ = Random.Range(terrainMargin, terrainData.size.z - terrainMargin);
+            Debug.LogError("[Explorer] Terrain has no spawnable area after applying explorer clearance.", this);
+            return false;
+        }
+
+        for (int attempt = 0; attempt < Mathf.Max(1, initialSpawnMaxAttempts); attempt++)
+        {
+            float randomX = Random.Range(effectiveMargin, terrainData.size.x - effectiveMargin);
+            float randomZ = Random.Range(effectiveMargin, terrainData.size.z - effectiveMargin);
 
             float worldX = terrainPos.x + randomX;
             float worldZ = terrainPos.z + randomZ;
@@ -781,20 +1139,43 @@ public class Explorer : MonoBehaviour
 
             if (cc != null) cc.enabled = true;
 
-            hasTarget = false;
-            stoppedAfterDroneFound = false;
-            isResting = false;
-            isAvoiding = false;
-            avoidTimer = 0f;
-            verticalVelocity = 0f;
-            lastDistanceToTarget = 0f;
-            StopRestAnimation();
-
             Debug.Log("Explorer position set: " + candidatePosition);
-
-            return;
+            return true;
         }
-        Debug.LogWarning("[Explorer.cs]: cannot set Explorer on terrain safe position");
+
+        Debug.LogError("[Explorer] Cannot find a safe spawn position; mission setup failed.", this);
+        return false;
+    }
+
+    private void ResetMissionState()
+    {
+        // Make the previous run unusable before searching. A failed search must not
+        // leave an old stopped/targeting state and transform available to a new run.
+        readyForMission = false;
+        enabled = false;
+        CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
+        if (cc != null)
+        {
+            cc.enabled = false;
+        }
+
+        hasTarget = false;
+        targetPosition = default;
+        stoppedAfterDroneFound = false;
+        isResting = false;
+        isAvoiding = false;
+        avoidTimer = 0f;
+        avoidRotation = Quaternion.identity;
+        verticalVelocity = 0f;
+        lastDistanceToTarget = 0f;
+        stuckTimer = 0f;
+        nextTargetSearchAt = 0f;
+        consecutiveTargetSearchFailures = 0;
+        nextTargetSearchFailureLogAt = 0f;
+        droneAnnouncementTimer = 0f;
+        nearestDrone = null;
+        StopRestAnimation();
+        SetIdleAnimation();
     }
 
     bool IsValidInitialSpawnPoint(Vector3 point)

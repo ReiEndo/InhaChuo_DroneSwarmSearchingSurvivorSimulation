@@ -1,3 +1,4 @@
+using System.Globalization;
 using Newtonsoft.Json.Bson;
 using TMPro;
 using UnityEngine;
@@ -5,6 +6,10 @@ using UnityEngine.UI;
 
 public class StartSettingsController : MonoBehaviour
 {
+    private static readonly CultureInfo NumericCulture = CultureInfo.InvariantCulture;
+    private const NumberStyles FloatNumberStyles = NumberStyles.Float;
+    private const string FloatFormat = "0.###";
+
     [Header("Panel")]
     [SerializeField] private GameObject settingsPanel;
 
@@ -96,10 +101,11 @@ public class StartSettingsController : MonoBehaviour
 
     public void ApplySettings()
     {
+        // Explorer target distances affect the minimum usable terrain size.
+        ApplyExplorerSettings();
         ApplyTerrainSettings();
         ApplyForestSettings();
         ApplyDroneSettings();
-        ApplyExplorerSettings();
         ApplyGameFlowSettings();
     }
 
@@ -167,10 +173,33 @@ public class StartSettingsController : MonoBehaviour
             return;
         }
 
-        terrainGenerator.widthx = GetInt(terrainWidthInput, terrainGenerator.widthx, 4, 2048);
-        terrainGenerator.widthz = GetInt(terrainWidthInput, terrainGenerator.widthz, 4, 2048);
+        int minimumWidth = TerrainGenerator.MinWorldDimension;
+        if (explorer != null)
+        {
+            minimumWidth = Mathf.Clamp(
+                explorer.GetMinimumTerrainDimension(),
+                TerrainGenerator.MinWorldDimension,
+                TerrainGenerator.MaxWorldDimension
+            );
+        }
+
+        int worldWidth = GetInt(
+            terrainWidthInput,
+            terrainGenerator.widthx,
+            minimumWidth,
+            TerrainGenerator.MaxWorldDimension
+        );
+        terrainGenerator.widthx = worldWidth;
+        terrainGenerator.widthz = worldWidth;
         terrainGenerator.scale = GetFloat(terrainScaleInput, terrainGenerator.scale, 1f, 5000f);
         terrainGenerator.terrainHeight = GetFloat(terrainHeightInput, terrainGenerator.terrainHeight, 1f, 1000f);
+
+        if (explorer != null)
+        {
+            explorer.ValidateConfigurationForTerrain(worldWidth, worldWidth, false);
+            SetText(explorerScanRadiusInput, explorer.scanRadius);
+            SetText(explorerMinTargetDistanceInput, explorer.minTargetDistance);
+        }
     }
 
     private void ApplyForestSettings()
@@ -196,10 +225,27 @@ public class StartSettingsController : MonoBehaviour
         forestSpawner.scaleRange = new Vector2(minScale, maxScale);
 
         forestSpawner.minDistance = GetFloat(minTreeDistanceInput, forestSpawner.minDistance, 0f, 1000f);
-        forestSpawner.maxSpawnAttemptCounts = GetInt(maxSpawnAttemptInput, forestSpawner.maxSpawnAttemptCounts, 1, 10000);
+        forestSpawner.maxSpawnAttemptCounts = GetInt(
+            maxSpawnAttemptInput,
+            forestSpawner.maxSpawnAttemptCounts,
+            1,
+            ForestSpawner.MaximumAttemptsPerObject
+        );
 
         forestSpawner.treePercent = GetSliderValue(treePercentSlider, forestSpawner.treePercent);
 
+        TerrainData forestTerrainData = forestSpawner.terrain != null
+            ? forestSpawner.terrain.terrainData
+            : null;
+        float forestWidth = terrainGenerator != null
+            ? terrainGenerator.widthx
+            : forestTerrainData != null ? forestTerrainData.size.x : 0f;
+        float forestDepth = terrainGenerator != null
+            ? terrainGenerator.widthz
+            : forestTerrainData != null ? forestTerrainData.size.z : 0f;
+        forestSpawner.ClampDensityForArea(forestWidth, forestDepth, true);
+        SetText(CountPer100mmInput, forestSpawner.objectsPer100SquareMeters);
+        SetText(maxSpawnAttemptInput, forestSpawner.maxSpawnAttemptCounts);
     }
 
     private void ApplyDroneSettings()
@@ -260,8 +306,17 @@ public class StartSettingsController : MonoBehaviour
             return;
         }
 
-        explorer.scanRadius = GetFloat(explorerScanRadiusInput, explorer.scanRadius, 1f, 10000f);
-        explorer.minTargetDistance = GetFloat(explorerMinTargetDistanceInput, explorer.minTargetDistance, 0f, 10000f);
+        float scanRadius = GetFloat(explorerScanRadiusInput, explorer.scanRadius, 1f, 10000f);
+        float minTargetDistance = GetFloat(
+            explorerMinTargetDistanceInput,
+            explorer.minTargetDistance,
+            0f,
+            scanRadius
+        );
+
+        explorer.scanRadius = scanRadius;
+        explorer.minTargetDistance = minTargetDistance;
+        SetText(explorerMinTargetDistanceInput, minTargetDistance);
         explorer.moveSpeed = GetFloat(explorerMoveSpeedInput, explorer.moveSpeed, 0f, 1000f);
 
         explorer.stamina = GetFloat(explorerStaminaInput, explorer.stamina, 0f, 100f);
@@ -314,40 +369,72 @@ public class StartSettingsController : MonoBehaviour
 
     private int GetInt(TMP_InputField input, int currentValue, int min, int max)
     {
-        if (input == null)
+        int value = currentValue;
+        if (input != null && !int.TryParse(input.text, out value))
         {
-            return currentValue;
-        }
-
-        if (!int.TryParse(input.text, out int value))
-        {
-            input.text = currentValue.ToString();
-            return currentValue;
+            value = currentValue;
         }
 
         value = Mathf.Clamp(value, min, max);
-        input.text = value.ToString();
+        if (input != null)
+        {
+            input.text = value.ToString();
+        }
 
         return value;
     }
 
     private float GetFloat(TMP_InputField input, float currentValue, float min, float max)
     {
-        if (input == null)
+        float value = currentValue;
+        bool rejectedInput = false;
+        string rejectionReason = null;
+
+        if (input != null)
         {
-            return currentValue;
+            if (!float.TryParse(input.text, FloatNumberStyles, NumericCulture, out value))
+            {
+                rejectedInput = true;
+                rejectionReason = "not a valid number (use '.' as the decimal separator)";
+            }
+            else if (!IsFinite(value))
+            {
+                rejectedInput = true;
+                rejectionReason = "not a finite number";
+            }
         }
 
-        if (!float.TryParse(input.text, out float value))
+        if (rejectedInput || !IsFinite(value))
         {
-            input.text = currentValue.ToString("0.###");
-            return currentValue;
+            value = IsFinite(currentValue) ? currentValue : min;
         }
 
         value = Mathf.Clamp(value, min, max);
-        input.text = value.ToString("0.###");
+        if (input != null)
+        {
+            string normalizedValue = FormatFloat(value);
+            if (rejectedInput)
+            {
+                Debug.LogWarning(
+                    $"Start setting '{input.name}' rejected '{input.text}': {rejectionReason}. Using '{normalizedValue}'.",
+                    input
+                );
+            }
+
+            input.text = normalizedValue;
+        }
 
         return value;
+    }
+
+    private static bool IsFinite(float value)
+    {
+        return !float.IsNaN(value) && !float.IsInfinity(value);
+    }
+
+    private static string FormatFloat(float value)
+    {
+        return value.ToString(FloatFormat, NumericCulture);
     }
 
     private void SetText(TMP_InputField input, int value)
@@ -362,7 +449,7 @@ public class StartSettingsController : MonoBehaviour
     {
         if (input != null)
         {
-            input.text = value.ToString("0.###");
+            input.text = FormatFloat(value);
         }
     }
     private void SetToggle(Toggle toggle, bool value)
@@ -399,8 +486,8 @@ public class StartSettingsController : MonoBehaviour
         }
         float clampedTreePercent = Mathf.Clamp(treePercent, 0f, 100f);
         float rockPercent = 100f - clampedTreePercent;
-        treePercentValueText.text = $"Tree {clampedTreePercent:0}%";
-        rockPercentValueText.text = $"Rock {rockPercent:0}%";
+        treePercentValueText.text = $"Tree {clampedTreePercent.ToString("0", NumericCulture)}%";
+        rockPercentValueText.text = $"Rock {rockPercent.ToString("0", NumericCulture)}%";
     }
     public void OnTreePercentSliderChanged()
     {

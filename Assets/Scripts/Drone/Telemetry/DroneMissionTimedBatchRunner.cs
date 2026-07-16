@@ -5,23 +5,14 @@ using UnityEngine;
 using Random = UnityEngine.Random;
 
 /// <summary>
-/// Runs drone missions in wall-clock timed segments separated by long cooldown
-/// rests, repeating until a target number of <em>valid</em> missions
-/// (<see cref="validEndReason"/>) have been written to the telemetry summary CSV.
-///
-/// Unlike <see cref="DroneMissionBatchRunner"/>, which fires a fixed number of
-/// missions back-to-back with short gaps, this runner is designed for sustained
-/// data collection on hardware that needs to cool down between running segments:
-///
-///   run segment (runSegmentMinutes) -> rest (restMinutes) -> run segment -> ...
-///   ... until (validMissionsCollectedThisBatch >= targetValidMissions).
-///
-/// During rest, rendering is disabled (all cameras + the debug renderer are
-/// turned off) and the simulation is paused (<see cref="Time.timeScale"/> = 0)
-/// so the GPU/CPU can idle, then everything is restored for the next segment.
+/// Runs timed mission segments with rendering-disabled cooldowns until enough
+/// valid missions have been persisted.
 /// </summary>
 public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
 {
+    private const float DefaultRunHardTimeoutSeconds = 180f;
+    private const float MinimumRunHardTimeoutSeconds = 1f;
+
     [Header("References")]
     [SerializeField] private DroneSwarmDemoBootstrap bootstrap;
     [SerializeField] private TerrainGenerator terrainGenerator;
@@ -38,7 +29,9 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
     [SerializeField] private float betweenMissionsDelaySeconds = 0.25f;
     [SerializeField] private float sessionStartTimeoutSeconds = 10f;
     [SerializeField] private float perSessionTimeoutSeconds = 120f;
-    [Tooltip("If true, an in-flight mission is allowed to finish naturally after the segment budget elapses (its own timeout still applies). If false, it is cut off at the segment boundary with end_reason = segment_timeout.")]
+    [Tooltip("Unconditional realtime hard limit for one run. Unlike the telemetry session timeout, this cannot be disabled and remains effective when a mission may overrun its segment or the global wall-clock cap is unlimited.")]
+    [SerializeField] private float runHardTimeoutSeconds = DefaultRunHardTimeoutSeconds;
+    [Tooltip("If true, an in-flight mission may overrun the segment, but never its run hard timeout. If false, it is cut off at the segment boundary with end_reason = segment_timeout.")]
     [SerializeField] private bool allowActiveMissionToFinishAfterSegment = true;
 
     [Header("Cooldown Rest")]
@@ -74,15 +67,24 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
     [SerializeField] private DroneNative.PlannerType plannerType = DroneNative.PlannerType.AStar;
 
     private Coroutine batchCoroutine;
+    private Coroutine telemetryCleanupCoroutine;
+    private bool telemetryCleanupPending;
+    private bool telemetryBatchContextCleared;
     private bool cancelRequested;
+    private bool batchCleanupCompleted;
+    private bool worldPreparationSucceeded;
+    private bool setupFailed;
+    private bool telemetryPersistenceFailed;
+    private bool wallClockTimeoutReached;
 
-    // Rendering-disable bookkeeping (rest periods).
     private readonly List<Camera> disabledCameras = new();
     private DroneSwarmDebugRenderer disabledDebugRenderer;
+    private bool cooldownStateApplied;
+    private bool timeScaleChanged;
     private float savedTimeScale = 1f;
 
     public bool AutoStartOnPlay => autoStartOnPlay;
-    public bool IsRunning => batchCoroutine != null;
+    public bool IsRunning => batchCoroutine != null || telemetryCleanupPending;
 
     private IEnumerator Start()
     {
@@ -102,6 +104,7 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
         betweenMissionsDelaySeconds = Mathf.Max(0f, betweenMissionsDelaySeconds);
         sessionStartTimeoutSeconds = Mathf.Max(0.1f, sessionStartTimeoutSeconds);
         perSessionTimeoutSeconds = Mathf.Max(0f, perSessionTimeoutSeconds);
+        runHardTimeoutSeconds = GetValidRunHardTimeoutSeconds();
         restMinutes = Mathf.Max(0f, restMinutes);
         targetValidMissions = Mathf.Max(1, targetValidMissions);
         maxWallClockHours = Mathf.Max(0f, maxWallClockHours);
@@ -121,9 +124,9 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
             return;
         }
 
-        if (batchCoroutine != null)
+        if (batchCoroutine != null || telemetryCleanupPending)
         {
-            Debug.LogWarning("[TimedBatch] A batch is already running.", this);
+            Debug.LogWarning("[TimedBatch] A batch or telemetry cleanup is already running.", this);
             return;
         }
 
@@ -134,14 +137,35 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
             return;
         }
 
+        // Readiness creates the recorder and recovers pending session ends before counting.
+        if (!bootstrap.TryPrepareTelemetryForBatch(out telemetryRecorder))
+        {
+            string detail = telemetryRecorder != null
+                ? telemetryRecorder.LastPersistenceError
+                : "telemetry recorder/bootstrap is unavailable";
+            Debug.LogError($"[TimedBatch] Cannot start because telemetry storage is not ready: {detail}", this);
+            return;
+        }
+
         cancelRequested = false;
+        batchCleanupCompleted = false;
+        telemetryCleanupPending = false;
+        telemetryBatchContextCleared = false;
+        setupFailed = false;
+        telemetryPersistenceFailed = false;
+        wallClockTimeoutReached = false;
         batchCoroutine = StartCoroutine(RunBatchCoroutine());
     }
 
     [ContextMenu("Cancel Batch")]
     public void CancelBatch()
     {
-        cancelRequested = true;
+        if (batchCoroutine == null && !cooldownStateApplied)
+        {
+            return;
+        }
+
+        StopAndCleanupBatch();
     }
 
     private IEnumerator RunBatchCoroutine()
@@ -151,51 +175,62 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
         float segmentBudgetSeconds = runSegmentMinutes * 60f;
         float restSeconds = restMinutes * 60f;
         float maxWallClockSeconds = maxWallClockHours > 0f ? maxWallClockHours * 3600f : 0f;
+        float batchDeadlineReal = maxWallClockSeconds > 0f
+            ? batchStartReal + maxWallClockSeconds
+            : float.PositiveInfinity;
+        // Runtime values bypass OnValidate and must be clamped again.
+        runHardTimeoutSeconds = GetValidRunHardTimeoutSeconds();
 
-        int baselineValid = CountValidMissions();
         int runIndex = 0;
         int segmentIndex = 0;
 
-        Debug.Log(
-            $"[TimedBatch] Starting batch {batchId}. baseline valid={baselineValid}, " +
-            $"target new={targetValidMissions} (stop at {baselineValid + targetValidMissions}), " +
-            $"segment={runSegmentMinutes:0.#}m, rest={restMinutes:0.#}m, " +
-            $"planner={plannerType}, drones={droneCount}, sensor={sensorRadius}, " +
-            $"comms={communicationRadius:0.###}, speed={droneSpeed:0.###}",
-            this);
-
-        EnableRendering();
-
-        while (!cancelRequested)
+        try
         {
-            int currentValid = CountValidMissions();
-            int collectedThisBatch = currentValid - baselineValid;
+            int initialValid = CountValidMissions(batchId);
+            Debug.Log(
+                $"[TimedBatch] Starting new batch {batchId}. valid for this batch={initialValid}, " +
+                $"target={targetValidMissions}, " +
+                $"segment={runSegmentMinutes:0.#}m, rest={restMinutes:0.#}m, " +
+                $"planner={plannerType}, drones={droneCount}, sensor={sensorRadius}, " +
+                $"comms={communicationRadius:0.###}, speed={droneSpeed:0.###}",
+                this);
+
+            EnableRendering();
+
+        while (!cancelRequested && !telemetryPersistenceFailed)
+        {
+            int collectedThisBatch = CountValidMissions(batchId);
+            if (telemetryPersistenceFailed)
+            {
+                break;
+            }
             if (collectedThisBatch >= targetValidMissions)
             {
                 Debug.Log($"[TimedBatch] Target reached: {collectedThisBatch}/{targetValidMissions} valid missions collected.", this);
                 break;
             }
 
-            if (maxWallClockSeconds > 0f && (Time.realtimeSinceStartup - batchStartReal) >= maxWallClockSeconds)
+            if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
             {
                 Debug.LogWarning($"[TimedBatch] Wall-clock cap of {maxWallClockHours:0.#}h reached. Stopping with {collectedThisBatch}/{targetValidMissions} valid missions.", this);
                 break;
             }
 
             segmentIndex++;
-            float segmentStartReal = Time.realtimeSinceStartup;
-            Debug.Log($"[TimedBatch] Segment {segmentIndex} start. valid so far: {currentValid} (collected: {collectedThisBatch}/{targetValidMissions}).", this);
+            float segmentDeadlineReal = Time.realtimeSinceStartup + segmentBudgetSeconds;
+            Debug.Log($"[TimedBatch] Segment {segmentIndex} start. collected: {collectedThisBatch}/{targetValidMissions}.", this);
 
-            // --- Running segment: launch missions until the wall-clock budget elapses. ---
-            while (!cancelRequested)
+            while (!cancelRequested && !telemetryPersistenceFailed)
             {
-                if (CountValidMissions() - baselineValid >= targetValidMissions)
+                int validAtRunStart = CountValidMissions(batchId);
+                if (telemetryPersistenceFailed || validAtRunStart >= targetValidMissions)
                 {
                     break;
                 }
 
-                float elapsedInSegment = Time.realtimeSinceStartup - segmentStartReal;
-                if (elapsedInSegment >= segmentBudgetSeconds)
+                float remainingInSegment = segmentDeadlineReal - Time.realtimeSinceStartup;
+                if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex)
+                    || HasReachedDeadline(segmentDeadlineReal))
                 {
                     break;
                 }
@@ -208,10 +243,51 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
                     $"[TimedBatch] Run {runIndex}: " +
                     $"planner={plannerType}, drones={droneCount}, sensor={sensorRadius}, " +
                     $"comms={communicationRadius:0.###}, speed={droneSpeed:0.###}, seed={seed}, " +
-                    $"segment={segmentIndex}, elapsed={elapsedInSegment:0.#}/{segmentBudgetSeconds:0.#}s",
+                    $"segment={segmentIndex}, remaining={Mathf.Max(0f, remainingInSegment):0.#}/{segmentBudgetSeconds:0.#}s",
                     this);
 
+                // Synchronous world preparation counts toward the run deadline.
+                float runHardDeadlineReal = Time.realtimeSinceStartup + runHardTimeoutSeconds;
+                bool runHardTimeoutReached = false;
                 yield return PrepareWorldForRun();
+
+                if (cancelRequested)
+                {
+                    break;
+                }
+                if (CheckTelemetryPersistenceFailure(batchId, runIndex))
+                {
+                    break;
+                }
+                if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
+                {
+                    break;
+                }
+                if (TryReachRunHardDeadline(runHardDeadlineReal, batchId, runIndex))
+                {
+                    if (IsFinalPersistenceRetryInProgress())
+                    {
+                        yield return WaitForFinalPersistenceResolution(batchDeadlineReal, batchId, runIndex);
+                    }
+                    if (cancelRequested || wallClockTimeoutReached
+                        || CheckTelemetryPersistenceFailure(batchId, runIndex))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+                // Recheck the segment deadline after synchronous preparation and final yields.
+                if (TryReachSegmentDeadline(segmentDeadlineReal, false))
+                {
+                    break;
+                }
+                if (!worldPreparationSucceeded)
+                {
+                    setupFailed = true;
+                    Debug.LogError($"[TimedBatch] Run {runIndex} world setup failed; aborting batch.", this);
+                    break;
+                }
 
                 bootstrap.ConfigureExperiment(
                     droneCount,
@@ -228,12 +304,83 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
                     repeatIndex: runIndex,
                     hasRandomSeed: true,
                     randomSeed: seed);
-                bootstrap.ResetDemo();
-
-                bool sessionStarted = false;
-                float startDeadline = Time.realtimeSinceStartup + sessionStartTimeoutSeconds;
-                while (!cancelRequested && Time.realtimeSinceStartup <= startDeadline)
+                if (!bootstrap.TryResetDemo())
                 {
+                    setupFailed = true;
+                    Debug.LogError($"[TimedBatch] Run {runIndex} world reset could not be queued.", this);
+                    break;
+                }
+
+                // Reset owns retries before a write error becomes terminal.
+                while (!cancelRequested
+                    && bootstrap.IsResetQueued
+                    && !HasReachedDeadline(batchDeadlineReal)
+                    && !HasReachedDeadline(runHardDeadlineReal)
+                    && !HasReachedDeadline(segmentDeadlineReal))
+                {
+                    yield return null;
+                }
+
+                // Apply cancellation, persistence, global, then run deadline precedence.
+                if (cancelRequested)
+                {
+                    break;
+                }
+                if (CheckTelemetryPersistenceFailure(batchId, runIndex))
+                {
+                    break;
+                }
+                if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
+                {
+                    break;
+                }
+                if (TryReachRunHardDeadline(runHardDeadlineReal, batchId, runIndex))
+                {
+                    runHardTimeoutReached = true;
+                }
+
+                if (runHardTimeoutReached)
+                {
+                    if (IsFinalPersistenceRetryInProgress())
+                    {
+                        yield return WaitForFinalPersistenceResolution(batchDeadlineReal, batchId, runIndex);
+                    }
+                    if (cancelRequested || wallClockTimeoutReached
+                        || CheckTelemetryPersistenceFailure(batchId, runIndex))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+                if (!bootstrap.IsResetQueued && !bootstrap.LastResetSucceeded)
+                {
+                    setupFailed = true;
+                    Debug.LogError($"[TimedBatch] Run {runIndex} world reset failed: {bootstrap.LastResetError}", this);
+                    break;
+                }
+                // Cancel or freeze resets that cross the segment deadline.
+                bool sessionStarted = HasActiveMissionStartedBeforeDeadline(segmentDeadlineReal);
+                if (TryReachSegmentDeadline(segmentDeadlineReal, sessionStarted)
+                    && (!sessionStarted
+                        || !allowActiveMissionToFinishAfterSegment
+                        || !bootstrap.IsTelemetrySessionActive))
+                {
+                    break;
+                }
+
+                float startDeadline = Time.realtimeSinceStartup + sessionStartTimeoutSeconds;
+                while (!cancelRequested
+                    && Time.realtimeSinceStartup <= startDeadline
+                    && !HasReachedDeadline(batchDeadlineReal)
+                    && !HasReachedDeadline(runHardDeadlineReal)
+                    && !HasReachedDeadline(segmentDeadlineReal))
+                {
+                    if (CheckTelemetryPersistenceFailure(batchId, runIndex))
+                    {
+                        break;
+                    }
+
                     if (bootstrap.IsTelemetrySessionActive)
                     {
                         sessionStarted = true;
@@ -243,65 +390,123 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
                     yield return null;
                 }
 
+                // Apply deadline precedence before accepting a final-frame session.
+                CheckTelemetryPersistenceFailure(batchId, runIndex);
+                if (!sessionStarted)
+                {
+                    sessionStarted = HasActiveMissionStartedBeforeDeadline(segmentDeadlineReal);
+                }
+
+                if (telemetryPersistenceFailed || cancelRequested)
+                {
+                    break;
+                }
+                if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
+                {
+                    break;
+                }
+                if (TryReachRunHardDeadline(runHardDeadlineReal, batchId, runIndex))
+                {
+                    if (IsFinalPersistenceRetryInProgress())
+                    {
+                        yield return WaitForFinalPersistenceResolution(batchDeadlineReal, batchId, runIndex);
+                    }
+                    if (cancelRequested || wallClockTimeoutReached
+                        || CheckTelemetryPersistenceFailure(batchId, runIndex))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+                if (TryReachSegmentDeadline(segmentDeadlineReal, sessionStarted)
+                    && (!sessionStarted
+                        || !allowActiveMissionToFinishAfterSegment
+                        || !bootstrap.IsTelemetrySessionActive))
+                {
+                    break;
+                }
+                if (!sessionStarted && bootstrap.IsTelemetrySessionActive)
+                {
+                    sessionStarted = true;
+                }
                 if (!sessionStarted)
                 {
                     Debug.LogWarning($"[TimedBatch] Run {runIndex} did not start a telemetry session.", this);
                     continue;
                 }
 
-                // Wait for the mission to end. Optionally cut it off at the segment boundary.
-                while (!cancelRequested && bootstrap.IsTelemetrySessionActive)
-                {
-                    if (!allowActiveMissionToFinishAfterSegment
-                        && (Time.realtimeSinceStartup - segmentStartReal) >= segmentBudgetSeconds)
-                    {
-                        bootstrap.EndActiveTelemetrySession("segment_timeout", false);
-                        break;
-                    }
+                yield return WaitForActiveSessionToEnd(
+                    batchId,
+                    runIndex,
+                    segmentDeadlineReal,
+                    batchDeadlineReal,
+                    runHardDeadlineReal);
 
-                    yield return null;
+                CheckTelemetryPersistenceFailure(batchId, runIndex);
+                if (cancelRequested || telemetryPersistenceFailed)
+                {
+                    break;
                 }
 
-                if (cancelRequested)
+                // Recount before another launch so the exact target ends the segment.
+                int validAfterRun = CountValidMissions(batchId);
+                if (telemetryPersistenceFailed || validAfterRun >= targetValidMissions)
                 {
                     break;
                 }
 
                 if (betweenMissionsDelaySeconds > 0f)
                 {
-                    yield return new WaitForSecondsRealtime(betweenMissionsDelaySeconds);
+                    float delayDeadline = Time.realtimeSinceStartup + betweenMissionsDelaySeconds;
+                    while (!cancelRequested
+                        && Time.realtimeSinceStartup < delayDeadline
+                        && !HasReachedDeadline(batchDeadlineReal)
+                        && !HasReachedDeadline(segmentDeadlineReal))
+                    {
+                        yield return null;
+                    }
+
+                    if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
+                    {
+                        break;
+                    }
+                    if (TryReachSegmentDeadline(segmentDeadlineReal, false))
+                    {
+                        break;
+                    }
                 }
             }
 
-            if (cancelRequested)
+            if (cancelRequested || setupFailed || telemetryPersistenceFailed || wallClockTimeoutReached)
             {
                 break;
             }
 
-            int validNow = CountValidMissions();
-            int collectedNow = validNow - baselineValid;
+            int collectedNow = CountValidMissions(batchId);
             if (collectedNow >= targetValidMissions)
             {
                 Debug.Log($"[TimedBatch] Target reached after segment {segmentIndex}: {collectedNow}/{targetValidMissions}.", this);
                 break;
             }
 
-            // --- Cooldown rest. ---
             if (restSeconds > 0f)
             {
                 Debug.Log(
-                    $"[TimedBatch] Segment {segmentIndex} done. valid={validNow} (collected: {collectedNow}/{targetValidMissions}). " +
+                    $"[TimedBatch] Segment {segmentIndex} done. collected: {collectedNow}/{targetValidMissions}. " +
                     $"Cooling down for {restMinutes:0.#}m (rendering disabled).",
                     this);
                 DisableRendering();
                 float restStartReal = Time.realtimeSinceStartup;
-                while (!cancelRequested && (Time.realtimeSinceStartup - restStartReal) < restSeconds)
+                while (!cancelRequested
+                    && (Time.realtimeSinceStartup - restStartReal) < restSeconds
+                    && !HasReachedDeadline(batchDeadlineReal))
                 {
                     yield return null;
                 }
 
                 EnableRendering();
-                if (cancelRequested)
+                if (cancelRequested || TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
                 {
                     break;
                 }
@@ -310,70 +515,495 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
             }
         }
 
-        EnableRendering();
-        bootstrap.ClearTelemetryBatchContext();
-
-        int finalValid = CountValidMissions();
-        int finalCollected = finalValid - baselineValid;
-        if (cancelRequested)
+        int finalCollected = CountValidMissions(batchId);
+        if (telemetryPersistenceFailed)
         {
-            Debug.LogWarning($"[TimedBatch] Batch {batchId} cancelled. Valid: {finalValid} (collected this batch: {finalCollected}/{targetValidMissions}).", this);
+            Debug.LogError($"[TimedBatch] Batch {batchId} stopped after telemetry persistence failure. Collected: {finalCollected}/{targetValidMissions}.", this);
+        }
+        else if (setupFailed)
+        {
+            Debug.LogError($"[TimedBatch] Batch {batchId} stopped after world setup failure. Collected: {finalCollected}/{targetValidMissions}.", this);
+        }
+        else if (cancelRequested)
+        {
+            Debug.LogWarning($"[TimedBatch] Batch {batchId} cancelled. Collected: {finalCollected}/{targetValidMissions}.", this);
+        }
+        else if (wallClockTimeoutReached)
+        {
+            Debug.LogWarning($"[TimedBatch] Batch {batchId} reached its wall-clock cap. Collected: {finalCollected}/{targetValidMissions}. Runs: {runIndex}.", this);
         }
         else
         {
-            Debug.Log($"[TimedBatch] Batch {batchId} complete. Valid: {finalValid} (collected this batch: {finalCollected}/{targetValidMissions}). Runs: {runIndex}.", this);
+            Debug.Log($"[TimedBatch] Batch {batchId} complete. Collected: {finalCollected}/{targetValidMissions}. Runs: {runIndex}.", this);
+        }
+        }
+        finally
+        {
+            CleanupBatch(
+                telemetryPersistenceFailed ? "telemetry_write_failed" :
+                setupFailed ? "setup_failed" :
+                cancelRequested ? "batch_cancelled" :
+                wallClockTimeoutReached ? "wall_clock_timeout" : "batch_stopped");
+        }
+    }
+
+    private void OnEnable()
+    {
+        ResumePendingTelemetryCleanup();
+    }
+
+    private void OnDisable()
+    {
+        StopAndCleanupBatch();
+        StopTelemetryCleanupWaiter();
+    }
+
+    private void OnDestroy()
+    {
+        StopAndCleanupBatch();
+        StopTelemetryCleanupWaiter();
+        // Retire runner context without discarding recorder-owned frozen rows.
+        ClearBatchContextOnce();
+        telemetryCleanupPending = false;
+    }
+
+    private void StopAndCleanupBatch()
+    {
+        if (batchCoroutine == null && !cooldownStateApplied)
+        {
+            return;
+        }
+
+        cancelRequested = true;
+        if (batchCoroutine != null)
+        {
+            StopCoroutine(batchCoroutine);
+            batchCoroutine = null;
+        }
+
+        CleanupBatch("batch_cancelled");
+    }
+
+    private void CleanupBatch(string activeSessionEndReason)
+    {
+        if (batchCleanupCompleted)
+        {
+            return;
+        }
+        if (telemetryCleanupPending)
+        {
+            ResumePendingTelemetryCleanup();
+            return;
+        }
+
+        EnableRendering();
+        if (bootstrap != null)
+        {
+            bootstrap.ShutdownBatchRun(activeSessionEndReason, false);
         }
 
         batchCoroutine = null;
+        if (bootstrap != null
+            && bootstrap.IsFinalTelemetryPersistencePending
+            && !bootstrap.HasTerminalTelemetryPersistenceFailure)
+        {
+            telemetryCleanupPending = true;
+            ResumePendingTelemetryCleanup();
+            return;
+        }
+
+        CompleteBatchCleanup();
     }
 
-    private int CountValidMissions()
+    private void ResumePendingTelemetryCleanup()
+    {
+        if (!telemetryCleanupPending || batchCleanupCompleted)
+        {
+            return;
+        }
+        if (bootstrap == null
+            || !bootstrap.IsFinalTelemetryPersistencePending
+            || bootstrap.HasTerminalTelemetryPersistenceFailure)
+        {
+            CompleteBatchCleanup();
+            return;
+        }
+        if (isActiveAndEnabled && gameObject.activeInHierarchy && telemetryCleanupCoroutine == null)
+        {
+            telemetryCleanupCoroutine = StartCoroutine(WaitForTelemetryCleanup());
+        }
+    }
+
+    private void StopTelemetryCleanupWaiter()
+    {
+        if (telemetryCleanupCoroutine != null)
+        {
+            StopCoroutine(telemetryCleanupCoroutine);
+            telemetryCleanupCoroutine = null;
+        }
+    }
+
+    private IEnumerator WaitForTelemetryCleanup()
+    {
+        while (bootstrap != null
+            && bootstrap.IsFinalTelemetryPersistencePending
+            && !bootstrap.HasTerminalTelemetryPersistenceFailure)
+        {
+            yield return null;
+        }
+
+        telemetryCleanupCoroutine = null;
+        CompleteBatchCleanup();
+    }
+
+    private void CompleteBatchCleanup()
+    {
+        if (batchCleanupCompleted)
+        {
+            return;
+        }
+
+        batchCleanupCompleted = true;
+        telemetryCleanupPending = false;
+        telemetryCleanupCoroutine = null;
+        ClearBatchContextOnce();
+        batchCoroutine = null;
+    }
+
+    private void ClearBatchContextOnce()
+    {
+        if (telemetryBatchContextCleared)
+        {
+            return;
+        }
+
+        telemetryBatchContextCleared = true;
+        if (bootstrap != null)
+        {
+            bootstrap.ClearTelemetryBatchContext();
+        }
+    }
+
+    private int CountValidMissions(string batchId)
     {
         if (telemetryRecorder == null)
         {
             telemetryRecorder = FindAnyObjectByType<DroneMissionTelemetryRecorder>();
         }
 
-        return telemetryRecorder != null
-            ? telemetryRecorder.CountSessionsWithEndReason(validEndReason)
-            : 0;
+        if (telemetryRecorder == null)
+        {
+            telemetryPersistenceFailed = true;
+            Debug.LogError("[TimedBatch] Telemetry recorder is unavailable; stopping batch.", this);
+            return 0;
+        }
+
+        // Pending final-row retries are recoverable, not terminal batch failures.
+        if (IsTerminalTelemetryPersistenceFailure())
+        {
+            telemetryPersistenceFailed = true;
+            return 0;
+        }
+
+        if (!telemetryRecorder.TryCountUniqueSessionsWithEndReasonForBatch(
+                validEndReason,
+                batchId,
+                out int count))
+        {
+            // A pending final-row retry may also repair the read failure.
+            if (IsTerminalTelemetryPersistenceFailure())
+            {
+                telemetryPersistenceFailed = true;
+            }
+            return 0;
+        }
+
+        return count;
+    }
+
+    private IEnumerator WaitForActiveSessionToEnd(
+        string batchId,
+        int runIndex,
+        float segmentDeadlineReal,
+        float batchDeadlineReal,
+        float runHardDeadlineReal)
+    {
+        bool segmentCutoffApplied = false;
+        while (true)
+        {
+            // Cancellation and global deadline outrank same-frame persistence failure.
+            if (cancelRequested)
+            {
+                yield break;
+            }
+            if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
+            {
+                yield break;
+            }
+            if (TryReachRunHardDeadline(runHardDeadlineReal, batchId, runIndex))
+            {
+                // Final persistence gets its own bounded cleanup budget.
+                if (IsFinalPersistenceRetryInProgress())
+                {
+                    yield return WaitForFinalPersistenceResolution(batchDeadlineReal, batchId, runIndex);
+                }
+                yield break;
+            }
+            if (CheckTelemetryPersistenceFailure(batchId, runIndex))
+            {
+                yield break;
+            }
+
+            if (!bootstrap.IsTelemetrySessionActive)
+            {
+                // An inactive session may still have frozen rows awaiting persistence.
+                if (bootstrap.IsFinalTelemetryPersistencePending
+                    && !bootstrap.HasTerminalTelemetryPersistenceFailure)
+                {
+                    yield return null;
+                    continue;
+                }
+
+                yield break;
+            }
+
+            if (!segmentCutoffApplied
+                && !allowActiveMissionToFinishAfterSegment
+                && HasReachedDeadline(segmentDeadlineReal))
+            {
+                // Only the active-mission policy may cut off an accepted session.
+                segmentCutoffApplied = true;
+                bootstrap.ShutdownBatchRun("segment_timeout", false);
+            }
+
+            // Wait for final persistence, terminal failure, cancellation, or deadline.
+            yield return null;
+        }
+    }
+
+    private static bool HasReachedDeadline(float absoluteRealtimeDeadline)
+    {
+        return Time.realtimeSinceStartup >= absoluteRealtimeDeadline;
+    }
+
+    private bool HasActiveMissionStartedBeforeDeadline(float segmentDeadlineReal)
+    {
+        return bootstrap != null
+            && bootstrap.IsTelemetrySessionActive
+            && telemetryRecorder != null
+            && telemetryRecorder.ActiveSessionStartRealtime < segmentDeadlineReal;
+    }
+
+    private bool TryReachSegmentDeadline(
+        float segmentDeadlineReal,
+        bool activeMissionAcceptedBeforeDeadline)
+    {
+        if (!HasReachedDeadline(segmentDeadlineReal))
+        {
+            return false;
+        }
+
+        // Cancel queued resets before they can create a session past this boundary.
+        if (bootstrap != null && bootstrap.IsResetQueued)
+        {
+            bootstrap.CancelQueuedReset("Timed batch segment expired before mission launch.");
+        }
+
+        // Only sessions persisted before the deadline may finish after the segment.
+        if (bootstrap != null
+            && bootstrap.IsTelemetrySessionActive
+            && (!activeMissionAcceptedBeforeDeadline
+                || !allowActiveMissionToFinishAfterSegment))
+        {
+            bootstrap.ShutdownBatchRun("segment_timeout", false);
+        }
+
+        return true;
+    }
+
+    private bool TryReachWallClockDeadline(float batchDeadlineReal, string batchId, int runIndex)
+    {
+        if (!HasReachedDeadline(batchDeadlineReal))
+        {
+            return false;
+        }
+
+        if (!wallClockTimeoutReached)
+        {
+            wallClockTimeoutReached = true;
+            Debug.LogWarning(
+                $"[TimedBatch] Batch {batchId}, run {runIndex} reached the absolute wall-clock deadline.",
+                this);
+        }
+
+        if (bootstrap != null)
+        {
+            bootstrap.ShutdownBatchRun("wall_clock_timeout", false);
+        }
+
+        return true;
+    }
+
+    private bool TryReachRunHardDeadline(float runHardDeadlineReal, string batchId, int runIndex)
+    {
+        if (!HasReachedDeadline(runHardDeadlineReal))
+        {
+            return false;
+        }
+
+        Debug.LogWarning(
+            $"[TimedBatch] Batch {batchId}, run {runIndex} reached its {runHardTimeoutSeconds:0.###}s realtime hard deadline.",
+            this);
+        if (bootstrap != null)
+        {
+            bootstrap.ShutdownBatchRun("run_hard_timeout", false);
+        }
+
+        return true;
+    }
+
+    private bool IsFinalPersistenceRetryInProgress()
+    {
+        return bootstrap != null
+            && bootstrap.IsFinalTelemetryPersistencePending
+            && !bootstrap.HasTerminalTelemetryPersistenceFailure;
+    }
+
+    private IEnumerator WaitForFinalPersistenceResolution(
+        float batchDeadlineReal,
+        string batchId,
+        int runIndex)
+    {
+        while (bootstrap != null
+            && bootstrap.IsFinalTelemetryPersistencePending
+            && !bootstrap.HasTerminalTelemetryPersistenceFailure)
+        {
+            // Cancellation or global deadline cannot launch a replacement during cleanup.
+            if (cancelRequested)
+            {
+                yield break;
+            }
+            if (TryReachWallClockDeadline(batchDeadlineReal, batchId, runIndex))
+            {
+                yield break;
+            }
+
+            yield return null;
+        }
+
+        if (!cancelRequested && !wallClockTimeoutReached)
+        {
+            CheckTelemetryPersistenceFailure(batchId, runIndex);
+        }
+    }
+
+    private bool CheckTelemetryPersistenceFailure(string batchId, int runIndex)
+    {
+        if (telemetryRecorder == null)
+        {
+            telemetryRecorder = FindAnyObjectByType<DroneMissionTelemetryRecorder>();
+        }
+
+        telemetryPersistenceFailed = telemetryRecorder == null
+            || IsTerminalTelemetryPersistenceFailure();
+        if (telemetryPersistenceFailed)
+        {
+            string detail = telemetryRecorder != null
+                ? telemetryRecorder.LastPersistenceError
+                : "telemetry recorder is unavailable";
+            Debug.LogError($"[TimedBatch] Batch {batchId}, run {runIndex} telemetry persistence failed: {detail}", this);
+        }
+
+        return telemetryPersistenceFailed;
+    }
+
+    private bool IsTerminalTelemetryPersistenceFailure()
+    {
+        if (telemetryRecorder == null)
+        {
+            return true;
+        }
+
+        if (bootstrap != null)
+        {
+            if (bootstrap.HasTerminalTelemetryPersistenceFailure)
+            {
+                return true;
+            }
+            if (bootstrap.IsFinalTelemetryPersistencePending)
+            {
+                return false;
+            }
+        }
+
+        return telemetryRecorder.HasPersistenceFailure;
     }
 
     private IEnumerator PrepareWorldForRun()
     {
+        worldPreparationSucceeded = false;
         ResolveReferences();
 
-        if (clearForestBeforeSpawning && forestSpawner != null)
+        if ((clearForestBeforeSpawning || spawnForestEachRun) && forestSpawner == null)
+        {
+            Debug.LogError("[TimedBatch] ForestSpawner is required by the world reset settings.", this);
+            yield break;
+        }
+        if (regenerateTerrainEachRun && terrainGenerator == null)
+        {
+            Debug.LogError("[TimedBatch] TerrainGenerator is required by the world reset settings.", this);
+            yield break;
+        }
+
+        if (clearForestBeforeSpawning)
         {
             forestSpawner.ClearSpawnedTrees();
             yield return null;
         }
 
-        if (regenerateTerrainEachRun && terrainGenerator != null)
+        if (regenerateTerrainEachRun && !terrainGenerator.TryGenerateTerrain())
         {
-            terrainGenerator.GenerateTerrain();
+            Debug.LogError("[TimedBatch] Terrain generation failed.", this);
+            yield break;
         }
 
-        if (spawnForestEachRun && forestSpawner != null)
+        if (spawnForestEachRun && !forestSpawner.TrySpawnTrees())
         {
-            forestSpawner.SpawnTrees();
+            Debug.LogError("[TimedBatch] Forest generation failed.", this);
+            yield break;
         }
 
-        if (respawnExplorerEachRun && explorer != null)
+        if (respawnExplorerEachRun)
         {
-            explorer.ExplorerSpawner();
+            if (explorer == null || !explorer.ExplorerSpawner())
+            {
+                yield break;
+            }
+        }
+        else if (explorer == null || !explorer.IsReadyForMission)
+        {
+            Debug.LogError("[TimedBatch] Explorer is not ready for the run.", this);
+            yield break;
         }
 
         Physics.SyncTransforms();
         yield return null;
+        worldPreparationSucceeded = true;
     }
 
     private void DisableRendering()
     {
-        if (pauseSimulationDuringRest)
+        if (cooldownStateApplied)
+        {
+            return;
+        }
+
+        cooldownStateApplied = true;
+        if (pauseSimulationDuringRest && Time.timeScale != 0f)
         {
             savedTimeScale = Time.timeScale;
             Time.timeScale = 0f;
+            timeScaleChanged = true;
         }
 
         if (!disableRenderingDuringRest)
@@ -404,14 +1034,21 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
 
     private void EnableRendering()
     {
-        if (pauseSimulationDuringRest && Time.timeScale == 0f)
-        {
-            Time.timeScale = savedTimeScale > 0f ? savedTimeScale : 1f;
-        }
-
-        if (!disableRenderingDuringRest)
+        if (!cooldownStateApplied)
         {
             return;
+        }
+
+        cooldownStateApplied = false;
+        if (timeScaleChanged)
+        {
+            // Preserve a time scale changed by another system during rest.
+            if (Time.timeScale == 0f)
+            {
+                Time.timeScale = savedTimeScale;
+            }
+
+            timeScaleChanged = false;
         }
 
         foreach (var camera in disabledCameras)
@@ -464,8 +1101,18 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
         return useDeterministicSeeds ? baseSeed + oneBasedRunIndex - 1 : Guid.NewGuid().GetHashCode();
     }
 
+    private float GetValidRunHardTimeoutSeconds()
+    {
+        if (float.IsNaN(runHardTimeoutSeconds) || float.IsInfinity(runHardTimeoutSeconds))
+        {
+            return DefaultRunHardTimeoutSeconds;
+        }
+
+        return Mathf.Max(MinimumRunHardTimeoutSeconds, runHardTimeoutSeconds);
+    }
+
     private static string GenerateBatchId()
     {
-        return $"timed-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}-{Guid.NewGuid().ToString("N").Substring(0, 6)}";
+        return $"timed-{DateTime.UtcNow:yyyyMMddTHHmmssfffffffZ}-{Guid.NewGuid():N}";
     }
 }

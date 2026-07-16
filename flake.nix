@@ -99,7 +99,7 @@
             mkdir -p \
               Assets/Plugins/macOS \
               Assets/Plugins/Linux \
-              Assets/Plugins/Windows \
+              Assets/Plugins/Windows/x86_64 \
               Assets/Plugins/WebGL
 
             if [ -f "$build_dir/libdrone_algo.dylib" ]; then
@@ -115,12 +115,12 @@
             fi
 
             if [ -f "$build_dir/drone_algo.dll" ]; then
-              cp "$build_dir/drone_algo.dll" Assets/Plugins/Windows/drone_algo.dll
-              echo "Staged Assets/Plugins/Windows/drone_algo.dll"
+              cp "$build_dir/drone_algo.dll" Assets/Plugins/Windows/x86_64/drone_algo.dll
+              echo "Staged Assets/Plugins/Windows/x86_64/drone_algo.dll"
               staged=1
             elif [ -f "$build_dir/libdrone_algo.dll" ]; then
-              cp "$build_dir/libdrone_algo.dll" Assets/Plugins/Windows/drone_algo.dll
-              echo "Staged Assets/Plugins/Windows/drone_algo.dll"
+              cp "$build_dir/libdrone_algo.dll" Assets/Plugins/Windows/x86_64/drone_algo.dll
+              echo "Staged Assets/Plugins/Windows/x86_64/drone_algo.dll"
               staged=1
             fi
 

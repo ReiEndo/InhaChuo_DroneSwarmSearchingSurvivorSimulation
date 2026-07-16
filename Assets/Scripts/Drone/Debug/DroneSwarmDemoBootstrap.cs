@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.SceneManagement;
@@ -15,6 +16,8 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private const int c_NonSensedLayer = 2;
     private const string c_GridWorldLayerName = "GridWorld";
     private const float c_DroneCameraFieldOfView = 75f;
+    private const int c_FinalTelemetryRetryAttempts = 3;
+    private const float c_FinalTelemetryRetryIntervalSeconds = 0.5f;
 
 
     [Header("Grid")]
@@ -35,6 +38,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     [SerializeField] private DroneMissionTelemetryRecorder telemetryRecorder;
     [Tooltip("Optional automatic failure cutoff. Set to 0 to disable timeout-based session ending.")]
     [SerializeField] private float telemetryTimeoutSeconds = 0f;
+
+    [Header("Scene Ownership")]
+    [Tooltip("The human Explorer controlled by this simulation. Existing scenes may leave this empty when a ScriptsControl explicitly links this bootstrap to its Explorer.")]
+    [SerializeField] private Explorer humanExplorer;
+    [NonSerialized] private ScriptsControl scriptsControlOwner;
 
     private string telemetryBatchId = string.Empty;
     private bool telemetryHasBatchRunIndex;
@@ -71,14 +79,72 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     private DroneNative.PlannerType appliedPlannerType;
     private bool runtimeConfigInitialized;
     private bool resetQueued;
+    private Coroutine resetCoroutine;
+    [NonSerialized] private Action<string> resetRuntimeSetupExceptionInjection;
+    private bool lastResetSucceeded;
+    private string lastResetError = string.Empty;
     private bool missionComplete;
+    private bool gameplayStopped;
+    private bool batchRunShutdownApplied;
+    private bool newGamePreflightPassed;
+
+    private sealed class ReplayRuntimeState
+    {
+        internal bool GameplayStopped;
+        internal bool MissionComplete;
+        internal bool BatchRunShutdownApplied;
+        internal int Width;
+        internal int Depth;
+        internal float CellSize;
+        internal readonly List<GameObject> SpawnedObjects = new();
+        internal readonly List<DroneFrontierExplorer> Explorers = new();
+        internal readonly List<DroneCommunicationNode> CommunicationNodes = new();
+        internal readonly HashSet<int> DirectTargetReporterIds = new();
+        internal readonly List<Camera> DroneCameras = new();
+        internal readonly List<RawImage> DroneCameraViews = new();
+        internal readonly List<RenderTexture> DroneCameraTextures = new();
+        internal DroneDemoGridWorld World;
+        internal DroneSwarmCommunicationHub CommunicationHub;
+        internal DroneCommandRoutePlanner CommandRoutePlanner;
+        internal DroneSwarmAgentState CommandState;
+        internal DroneSwarmDebugRenderer DebugRenderer;
+        internal bool RuntimeCaptured;
+    }
+
+    private ReplayRuntimeState replayRuntimeState;
+    private bool finalTelemetryRetryExhausted;
+    private bool finalTelemetryPersistencePending;
+    private int finalTelemetryRetryAttemptsCompleted;
+    private Coroutine finalTelemetryRetryCoroutine;
     private float nextStatusTextUpdateAt;
-    private readonly List<Explorer> cachedExplorers = new();
-    private float nextExplorerCacheRefreshAt = -1f;
 
     public bool MissionComplete => missionComplete;
+
+    /// <summary>
+    /// Registers the scene controller that explicitly owns this bootstrap. The
+    /// controller remains authoritative if replay setup replaces its Explorer.
+    /// </summary>
+    public void ConfigureExplorerOwnership(ScriptsControl owner)
+    {
+        if (owner != null && owner.droneSwarmDemoBootstrap == this)
+        {
+            scriptsControlOwner = owner;
+        }
+    }
     public bool IsResetQueued => resetQueued;
+    /// <summary>Raised exactly once when an accepted queued reset succeeds, fails, or is cancelled.</summary>
+    public event Action<bool, string> ResetCompleted;
+    public bool LastResetSucceeded => lastResetSucceeded;
+    public string LastResetError => lastResetError;
+    public bool IsGameplayStopped => gameplayStopped;
     public bool IsTelemetrySessionActive => telemetryRecorder != null && telemetryRecorder.HasActiveSession;
+    public bool HasTelemetryPersistenceFailure => telemetryRecorder != null && telemetryRecorder.HasPersistenceFailure;
+    public string LastTelemetryPersistenceError => telemetryRecorder != null ? telemetryRecorder.LastPersistenceError : string.Empty;
+    public bool IsFinalTelemetryPersistencePending => finalTelemetryPersistencePending
+        || (telemetryRecorder != null && telemetryRecorder.HasPendingSessionEnd);
+    public bool HasTerminalTelemetryPersistenceFailure => finalTelemetryRetryExhausted
+        && telemetryRecorder != null
+        && telemetryRecorder.HasPendingSessionEnd;
     public string ActiveTelemetrySessionId => telemetryRecorder != null ? telemetryRecorder.ActiveSessionId : string.Empty;
     private bool IsBatchRun => !string.IsNullOrEmpty(telemetryBatchId) || telemetryHasBatchRunIndex;
 
@@ -132,39 +198,621 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         telemetryRandomSeed = 0;
     }
 
-    public void EndActiveTelemetrySession(string endReason, bool completed)
+    public bool EndActiveTelemetrySession(string endReason, bool completed)
     {
-        EndTelemetrySession(endReason, completed);
+        bool persisted = EndTelemetrySession(endReason, completed);
+        if (!persisted)
+        {
+            StartFinalTelemetryRetryIfNeeded();
+        }
+
+        return persisted;
+    }
+
+    /// <summary>
+    /// Terminates bootstrap-owned work for a batch run and freezes the current
+    /// simulation. Unlike <see cref="StopSimulation"/>, this does not latch the
+    /// interactive game in its stopped state, so a later deliberate batch reset
+    /// can replace the frozen world. A telemetry end that is already pending keeps
+    /// its original frozen rows and reason.
+    /// </summary>
+    public void ShutdownBatchRun(string endReason, bool completed)
+    {
+        newGamePreflightPassed = false;
+
+        if (resetCoroutine != null)
+        {
+            StopCoroutine(resetCoroutine);
+            resetCoroutine = null;
+        }
+
+        if (resetQueued)
+        {
+            CompleteReset(
+                false,
+                string.IsNullOrWhiteSpace(endReason)
+                    ? "Batch run shut down before the queued reset completed."
+                    : $"Batch run shut down: {endReason}");
+        }
+
+        // TryEndSession is itself idempotent and preserves an already-pending end.
+        // Keep an existing bounded retry alive; cleanup is not a reason to discard
+        // frozen rows that still have recovery attempts remaining.
+        bool telemetryPersisted = EndTelemetrySession(endReason, completed);
+
+        missionComplete = true;
+        batchRunShutdownApplied = true;
+        FreezeSimulationComponents();
+        if (!telemetryPersisted)
+        {
+            StartFinalTelemetryRetryIfNeeded();
+        }
+    }
+
+    /// <summary>
+    /// Makes telemetry ready before a batch performs baseline reads or failure
+    /// checks. This also creates the lazily configured recorder. A pending end is
+    /// retried with its original frozen rows; it is never replaced or discarded.
+    /// </summary>
+    public bool TryPrepareTelemetryForBatch(out DroneMissionTelemetryRecorder recorder)
+    {
+        recorder = null;
+        if (!telemetryEnabled)
+        {
+            Debug.LogError("[DroneTelemetry] Batch telemetry is disabled on the bootstrap.", this);
+            return false;
+        }
+
+        recorder = EnsureTelemetryRecorder();
+        if (recorder == null)
+        {
+            Debug.LogError("[DroneTelemetry] Cannot prepare batch telemetry because no recorder is available.", this);
+            return false;
+        }
+
+        if (!recorder.IsSummaryCsvEnabled)
+        {
+            Debug.LogError(
+                "[DroneTelemetry] Cannot prepare batch telemetry because summary CSV output is disabled. Batch completion requires persisted summary rows.",
+                this);
+            return false;
+        }
+
+        if (recorder.HasPendingSessionEnd)
+        {
+            if (!recorder.TryEndSession("telemetry_recovery", false))
+            {
+                Debug.LogError(
+                    $"[DroneTelemetry] Cannot prepare batch telemetry while the prior session end remains pending: {recorder.LastPersistenceError}",
+                    this);
+                return false;
+            }
+
+            // Readiness can recover the recorder synchronously, outside the retry
+            // coroutine. Reconcile the bootstrap-owned gate before any runner waits
+            // on it or attempts cleanup without starting another session.
+            MarkFinalTelemetryPersistenceComplete();
+        }
+
+        if (recorder.HasActiveSession)
+        {
+            Debug.LogError(
+                "[DroneTelemetry] Cannot prepare batch telemetry while another session is active. End it explicitly first.",
+                this);
+            return false;
+        }
+
+        if (!recorder.TryRevalidateStorage())
+        {
+            Debug.LogError($"[DroneTelemetry] Batch storage validation failed: {recorder.LastPersistenceError}", this);
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Authoritatively ends the current interactive mission without destroying its
+    /// world, so result cameras can continue to render the final state.
+    /// </summary>
+    public void StopSimulation(string endReason, bool completed)
+    {
+        if (gameplayStopped)
+        {
+            StartFinalTelemetryRetryIfNeeded();
+            return;
+        }
+
+        gameplayStopped = true;
+        missionComplete = true;
+        bool telemetryPersisted = EndTelemetrySession(endReason, completed);
+        FreezeSimulationComponents();
+
+        if (!telemetryPersisted)
+        {
+            StartFinalTelemetryRetryIfNeeded();
+        }
+    }
+
+    /// <summary>
+    /// Performs replay eligibility and persistence checks without changing the retained
+    /// result world or clearing the stopped-game latch. ScriptsControl calls this before
+    /// regenerating any part of the interactive world.
+    /// </summary>
+    public bool TryPrepareForNewGame()
+    {
+        newGamePreflightPassed = false;
+
+        if (!gameplayStopped)
+        {
+            Debug.LogError("[DroneSwarmDemoBootstrap] Replay can only begin after the interactive mission has stopped.", this);
+            return false;
+        }
+        if (IsBatchRun)
+        {
+            Debug.LogError("[DroneSwarmDemoBootstrap] Interactive replay is not available during a batch run.", this);
+            return false;
+        }
+        if (resetQueued)
+        {
+            Debug.LogError("[DroneSwarmDemoBootstrap] Cannot begin replay while a world reset is already queued.", this);
+            return false;
+        }
+
+        if (telemetryRecorder != null && telemetryRecorder.HasActiveSession
+            && !telemetryRecorder.TryEndSession("replay_recovery", false))
+        {
+            Debug.LogError(
+                $"[DroneTelemetry] Replay blocked because the prior session end is still pending: {telemetryRecorder.LastPersistenceError}",
+                this);
+            StartFinalTelemetryRetryIfNeeded();
+            return false;
+        }
+
+        if (telemetryEnabled)
+        {
+            DroneMissionTelemetryRecorder recorder = EnsureTelemetryRecorder();
+            if (recorder == null || !recorder.TryRevalidateStorage())
+            {
+                string error = recorder != null ? recorder.LastPersistenceError : "no recorder is available";
+                Debug.LogError($"[DroneTelemetry] Replay storage validation failed: {error}", this);
+                return false;
+            }
+        }
+
+        newGamePreflightPassed = true;
+        return true;
+    }
+
+    public bool CanActivatePreparedNewGame()
+    {
+        return newGamePreflightPassed && gameplayStopped && !IsBatchRun
+            && !resetQueued && replayRuntimeState == null;
+    }
+
+    /// <summary>
+    /// Opens a rollback-capable replay activation. Result drones remain intact until
+    /// CommitPreparedNewGame is called after the replacement reset has succeeded.
+    /// </summary>
+    public bool TryActivatePreparedNewGame()
+    {
+        if (!CanActivatePreparedNewGame())
+        {
+            Debug.LogError("[DroneSwarmDemoBootstrap] Replay activation requires a successful, current preflight.", this);
+            return false;
+        }
+
+        replayRuntimeState = new ReplayRuntimeState
+        {
+            GameplayStopped = gameplayStopped,
+            MissionComplete = missionComplete,
+            BatchRunShutdownApplied = batchRunShutdownApplied,
+            Width = width,
+            Depth = depth,
+            CellSize = cellSize
+        };
+        newGamePreflightPassed = false;
+        if (finalTelemetryRetryCoroutine != null)
+        {
+            StopCoroutine(finalTelemetryRetryCoroutine);
+            finalTelemetryRetryCoroutine = null;
+        }
+
+        finalTelemetryRetryExhausted = false;
+        finalTelemetryPersistencePending = false;
+        finalTelemetryRetryAttemptsCompleted = 0;
+        gameplayStopped = false;
+        missionComplete = false;
+        return true;
+    }
+
+    public void CommitPreparedNewGame()
+    {
+        ReplayRuntimeState retained = replayRuntimeState;
+        if (retained == null) return;
+        replayRuntimeState = null;
+        if (!retained.RuntimeCaptured)
+        {
+            retained.SpawnedObjects.AddRange(spawnedObjects);
+            spawnedObjects.Clear();
+        }
+        foreach (GameObject instance in retained.SpawnedObjects)
+        {
+            if (instance == null) continue;
+            instance.SetActive(false);
+            if (Application.isPlaying) Destroy(instance); else DestroyImmediate(instance);
+        }
+        foreach (RenderTexture texture in retained.DroneCameraTextures)
+        {
+            if (texture == null) continue;
+            texture.Release();
+            if (Application.isPlaying) Destroy(texture); else DestroyImmediate(texture);
+        }
+    }
+
+    public void RollbackPreparedNewGame()
+    {
+        ReplayRuntimeState retained = replayRuntimeState;
+        if (retained == null) return;
+        replayRuntimeState = null;
+
+        if (retained.RuntimeCaptured)
+        {
+            ClearRuntimeState();
+            spawnedObjects.AddRange(retained.SpawnedObjects);
+            explorers.AddRange(retained.Explorers);
+            communicationNodes.AddRange(retained.CommunicationNodes);
+            directTargetReporterIds.UnionWith(retained.DirectTargetReporterIds);
+            droneCameras.AddRange(retained.DroneCameras);
+            droneCameraViews.AddRange(retained.DroneCameraViews);
+            droneCameraTextures.AddRange(retained.DroneCameraTextures);
+            world = retained.World;
+            communicationHub = retained.CommunicationHub;
+            commandRoutePlanner = retained.CommandRoutePlanner;
+            commandState = retained.CommandState;
+            debugRenderer = retained.DebugRenderer;
+        }
+
+        width = retained.Width;
+        depth = retained.Depth;
+        cellSize = retained.CellSize;
+        gameplayStopped = retained.GameplayStopped;
+        missionComplete = retained.MissionComplete;
+        batchRunShutdownApplied = retained.BatchRunShutdownApplied;
+        newGamePreflightPassed = false;
+    }
+
+    /// <summary>Discards replay eligibility without changing world or telemetry state.</summary>
+    public void CancelPreparedNewGame()
+    {
+        newGamePreflightPassed = false;
+    }
+
+    /// <summary>
+    /// Restores the interactive replay boundary when startup fails after activation.
+    /// The replacement world remains available as the stopped result world and can be
+    /// transactionally replaced by a later retry.
+    /// </summary>
+    public void RestoreStoppedReplayBoundary()
+    {
+        newGamePreflightPassed = false;
+        gameplayStopped = true;
+        missionComplete = true;
+        FreezeSimulationComponents();
+    }
+
+    /// <summary>
+    /// Removes bootstrap-owned state from a failed initial startup. Unlike replay
+    /// rollback, initial startup must remain unstopped so the ordinary Start action can
+    /// retry rather than being routed through the new-game boundary.
+    /// </summary>
+    public void RollbackInitialStartup()
+    {
+        newGamePreflightPassed = false;
+        ClearRuntimeState();
+        gameplayStopped = false;
+        missionComplete = false;
+        batchRunShutdownApplied = false;
+    }
+
+    private void StartFinalTelemetryRetryIfNeeded()
+    {
+        // A coroutine handle is only the current waiter, not the durable state. Unity
+        // stops it on deactivation, so keep the pending flag and completed-attempt count
+        // until persistence succeeds or the bounded retry becomes terminal.
+        if (telemetryRecorder != null && telemetryRecorder.HasPendingSessionEnd)
+        {
+            finalTelemetryPersistencePending = true;
+        }
+        else if (telemetryRecorder != null && finalTelemetryPersistencePending)
+        {
+            // Persistence may have been recovered through the recorder's public API
+            // while this bootstrap was inactive.
+            MarkFinalTelemetryPersistenceComplete();
+            return;
+        }
+
+        if (isActiveAndEnabled
+            && gameObject.activeInHierarchy
+            && finalTelemetryPersistencePending
+            && !finalTelemetryRetryExhausted
+            && finalTelemetryRetryCoroutine == null)
+        {
+            finalTelemetryRetryCoroutine = StartCoroutine(RetryFinalTelemetryPersistence());
+        }
+    }
+
+    private IEnumerator RetryFinalTelemetryPersistence()
+    {
+        while (finalTelemetryRetryAttemptsCompleted < c_FinalTelemetryRetryAttempts)
+        {
+            yield return new WaitForSecondsRealtime(c_FinalTelemetryRetryIntervalSeconds);
+
+            if (telemetryRecorder == null || !telemetryRecorder.HasPendingSessionEnd)
+            {
+                MarkFinalTelemetryPersistenceComplete(false);
+                yield break;
+            }
+
+            int attempt = ++finalTelemetryRetryAttemptsCompleted;
+            if (telemetryRecorder.TryEndSession("telemetry_retry", false))
+            {
+                Debug.Log($"[DroneTelemetry] Final persistence recovered on realtime retry {attempt}.", this);
+                MarkFinalTelemetryPersistenceComplete(false);
+                yield break;
+            }
+        }
+
+        finalTelemetryRetryCoroutine = null;
+        finalTelemetryRetryExhausted = true;
+        finalTelemetryPersistencePending = telemetryRecorder != null && telemetryRecorder.HasPendingSessionEnd;
+        if (finalTelemetryPersistencePending)
+        {
+            Debug.LogError(
+                $"[DroneTelemetry] Final persistence still pending after {c_FinalTelemetryRetryAttempts} realtime retries: " +
+                telemetryRecorder.LastPersistenceError,
+                this);
+        }
+    }
+
+    private void MarkFinalTelemetryPersistenceComplete(bool stopActiveRetryCoroutine = true)
+    {
+        Coroutine retryCoroutine = finalTelemetryRetryCoroutine;
+        finalTelemetryRetryCoroutine = null;
+        if (stopActiveRetryCoroutine && retryCoroutine != null)
+        {
+            // Persistence may be recovered synchronously by readiness or another
+            // recorder caller while this coroutine is sleeping. Do not leave that
+            // waiter scheduled to retry a session which is already complete.
+            StopCoroutine(retryCoroutine);
+        }
+
+        finalTelemetryPersistencePending = false;
+        finalTelemetryRetryExhausted = false;
+        finalTelemetryRetryAttemptsCompleted = 0;
     }
 
     public void ResetDemo()
     {
-        if (resetQueued)
+        TryResetDemo();
+    }
+
+    public bool TryResetDemo()
+    {
+        if (resetQueued || gameplayStopped)
+        {
+            return false;
+        }
+
+        // Batch shutdown is a per-run freeze, not a permanent stop latch. The old
+        // components remain disabled until the queued reset replaces their world.
+        batchRunShutdownApplied = false;
+        resetQueued = true;
+        lastResetSucceeded = false;
+        lastResetError = string.Empty;
+        resetCoroutine = StartCoroutine(ResetDemoNextFrame());
+        return true;
+    }
+
+    public void CancelQueuedReset(string reason)
+    {
+        if (!resetQueued)
         {
             return;
         }
 
-        resetQueued = true;
-        StartCoroutine(ResetDemoNextFrame());
+        if (resetCoroutine != null)
+        {
+            StopCoroutine(resetCoroutine);
+            resetCoroutine = null;
+        }
+
+        // Replay cancellation restores the retained runtime instead of freezing or
+        // retiring it. Initial startup still freezes any partial runtime.
+        if (replayRuntimeState != null)
+        {
+            RollbackPreparedNewGame();
+        }
+        else
+        {
+            missionComplete = true;
+            FreezeSimulationComponents();
+        }
+        CompleteReset(
+            false,
+            string.IsNullOrWhiteSpace(reason) ? "Queued reset was cancelled." : reason);
     }
 
     private IEnumerator ResetDemoNextFrame()
     {
         yield return null;
 
-        EndTelemetrySession("reset", false);
-        ClearRuntimeState();
-        BuildWorld();
-        BuildSwarm();
-        BuildDebugRenderer();
-        //新たにUIを作成するためコメントアウト↓
-        //BuildUi();
+        if (gameplayStopped)
+        {
+            FailReset("Simulation stopped before the queued reset could begin.");
+            yield break;
+        }
 
-        communicationHub.ResetCommunicationMemory();
-        communicationHub.RefreshNodes();
-        CaptureRuntimeConfig();
-        BeginTelemetrySession();
+        // Finalizing the old session is the transaction boundary. Do not retire
+        // any world objects until its frozen end rows have been persisted. The
+        // initial attempt plus these retries matches final-session recovery.
+        bool telemetryPersisted;
+        try
+        {
+            telemetryPersisted = EndTelemetrySession("reset", false);
+        }
+        catch (Exception exception)
+        {
+            FailResetAfterException("finalizing the prior telemetry session", exception, false);
+            yield break;
+        }
+
+        for (int attempt = 1;
+             !telemetryPersisted && attempt <= c_FinalTelemetryRetryAttempts;
+             attempt++)
+        {
+            yield return new WaitForSecondsRealtime(c_FinalTelemetryRetryIntervalSeconds);
+            try
+            {
+                telemetryPersisted = EndTelemetrySession("reset", false);
+            }
+            catch (Exception exception)
+            {
+                FailResetAfterException("retrying prior telemetry persistence", exception, false);
+                yield break;
+            }
+        }
+
+        if (!telemetryPersisted)
+        {
+            string detail = telemetryRecorder != null
+                ? telemetryRecorder.LastPersistenceError
+                : "telemetry recorder is unavailable";
+            FailReset($"Prior telemetry session could not be finalized: {detail}");
+            yield break;
+        }
+
+        bool telemetryStarted;
+        try
+        {
+            finalTelemetryRetryExhausted = false;
+            ClearRuntimeState();
+            resetRuntimeSetupExceptionInjection?.Invoke("world");
+            BuildWorld();
+            resetRuntimeSetupExceptionInjection?.Invoke("swarm");
+            BuildSwarm();
+            BuildDebugRenderer();
+            //新たにUIを作成するためコメントアウト↓
+            //BuildUi();
+
+            communicationHub.ResetCommunicationMemory();
+            communicationHub.RefreshNodes();
+            CaptureRuntimeConfig();
+            resetRuntimeSetupExceptionInjection?.Invoke("telemetry");
+            telemetryStarted = TryBeginTelemetrySession();
+        }
+        catch (Exception exception)
+        {
+            FailResetAfterException("building the replacement runtime", exception, true);
+            yield break;
+        }
+
+        if (!telemetryStarted)
+        {
+            string detail = telemetryRecorder != null
+                ? telemetryRecorder.LastPersistenceError
+                : "telemetry recorder is unavailable";
+            FailReset($"Telemetry session could not be started: {detail}");
+            yield break;
+        }
+
+        CompleteReset(true, string.Empty);
+    }
+
+    private void FailResetAfterException(string operation, Exception exception, bool clearPartialRuntime)
+    {
+        // Never let an exception strand resetQueued. Build failures may leave a
+        // partially registered swarm, so first freeze it and then best-effort clear it.
+        missionComplete = true;
+        try
+        {
+            // Before replay runtime capture these are retained result components;
+            // touching them would make rollback observably lossy.
+            if (replayRuntimeState == null || replayRuntimeState.RuntimeCaptured)
+            {
+                FreezeSimulationComponents();
+            }
+        }
+        catch (Exception cleanupException)
+        {
+            Debug.LogException(cleanupException, this);
+        }
+
+        if (clearPartialRuntime)
+        {
+            try
+            {
+                ClearRuntimeState();
+                missionComplete = true;
+            }
+            catch (Exception cleanupException)
+            {
+                Debug.LogException(cleanupException, this);
+            }
+        }
+
+        if (replayRuntimeState != null)
+        {
+            RollbackPreparedNewGame();
+        }
+        string error = $"Exception while {operation}: {exception.GetType().Name}: {exception.Message}";
+        CompleteReset(false, error);
+        Debug.LogException(exception, this);
+        Debug.LogError($"[DroneSwarmDemoBootstrap] World reset aborted. {error}", this);
+    }
+
+    private void FailReset(string error)
+    {
+        // A reset can fail after the new world has been built. Freeze both old and
+        // new runtime components so a caller that remains on its start screen never
+        // leaves an unrecorded simulation running in the background.
+        missionComplete = true;
+        if (replayRuntimeState == null || replayRuntimeState.RuntimeCaptured)
+        {
+            FreezeSimulationComponents();
+        }
+        if (replayRuntimeState != null)
+        {
+            RollbackPreparedNewGame();
+        }
+        CompleteReset(false, error);
+        Debug.LogError($"[DroneSwarmDemoBootstrap] World reset aborted. {lastResetError}", this);
+    }
+
+    private void CompleteReset(bool succeeded, string error)
+    {
+        lastResetSucceeded = succeeded;
+        lastResetError = succeeded ? string.Empty : (error ?? string.Empty);
         resetQueued = false;
+        resetCoroutine = null;
+
+        Action<bool, string> handlers = ResetCompleted;
+        if (handlers == null)
+        {
+            return;
+        }
+
+        foreach (Action<bool, string> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(succeeded, lastResetError);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+        }
     }
 
     /*
@@ -174,6 +822,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
     private void Update()
     {
+        if (gameplayStopped || batchRunShutdownApplied)
+        {
+            return;
+        }
+
         ApplyInspectorChanges();
         UpdateTelemetryMilestones();
         CheckMissionComplete();
@@ -181,10 +834,117 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         UpdateStatusText();
     }
 
+    private void OnEnable()
+    {
+        // Batch shutdown does not set gameplayStopped, and a disable may have stopped
+        // the retry coroutine while its frozen end rows were still pending.
+        if (IsFinalTelemetryPersistencePending)
+        {
+            StartFinalTelemetryRetryIfNeeded();
+        }
+    }
+
+    private void OnDisable()
+    {
+        HandleLifecycleShutdown("bootstrap_disabled");
+    }
+
     private void OnDestroy()
     {
-        EndTelemetrySession("destroyed", false);
+        HandleLifecycleShutdown("bootstrap_destroyed");
+        // The recorder retains any frozen pending rows for external recovery, but a
+        // destroyed bootstrap must not leave its per-run context attached to them.
+        ClearTelemetryBatchContext();
         ReleaseDroneCameraTextures();
+    }
+
+    private void HandleLifecycleShutdown(string endReason)
+    {
+        // Coroutines are not a reliable cleanup mechanism after deactivation. In
+        // particular, a queued reset must not rebuild the world after this component
+        // is re-enabled, and a final telemetry retry must not be started from here.
+        StopAllCoroutines();
+        finalTelemetryRetryCoroutine = null;
+        resetCoroutine = null;
+
+        if (IsBatchRun || batchRunShutdownApplied)
+        {
+            // A temporary component/parent disable must not turn a batch freeze
+            // into the permanent interactive-game stop latch.
+            ShutdownBatchRun(endReason, false);
+            return;
+        }
+
+        if (resetQueued)
+        {
+            // Complete the cancellation as a terminal lifecycle path. ScriptsControl's
+            // synchronous completion handler restores either the unstopped initial-start
+            // boundary or the stopped replay boundary. Continuing into StopSimulation
+            // would overwrite the initial boundary and permanently reject its retry.
+            CancelQueuedReset("Bootstrap was disabled before the queued reset completed.");
+            return;
+        }
+
+        // StopSimulation is idempotent. An explicit game-flow stop remains
+        // authoritative because TryEndSession preserves the first frozen end rows and
+        // a stopped bootstrap does not end them again. Established gameplay still
+        // reaches this path and stops normally.
+        StopSimulation(endReason, false);
+    }
+
+    private void FreezeSimulationComponents()
+    {
+        foreach (var droneExplorer in explorers)
+        {
+            if (droneExplorer == null)
+            {
+                continue;
+            }
+
+            droneExplorer.StopAfterMissionComplete();
+            droneExplorer.enabled = false;
+
+            if (droneExplorer.TryGetComponent<DronePathFollower>(out var pathFollower))
+            {
+                pathFollower.enabled = false;
+            }
+            if (droneExplorer.TryGetComponent<DroneNativePathFollower>(out var nativePathFollower))
+            {
+                nativePathFollower.enabled = false;
+            }
+            if (droneExplorer.TryGetComponent<DroneGridSensor>(out var sensor))
+            {
+                sensor.enabled = false;
+            }
+            if (droneExplorer.TryGetComponent<DroneMissionEndReporter>(out var endReporter))
+            {
+                endReporter.enabled = false;
+            }
+            if (droneExplorer.TryGetComponent<DroneLocalAvoidanceMotor>(out var avoidanceMotor))
+            {
+                avoidanceMotor.enabled = false;
+            }
+            if (droneExplorer.TryGetComponent<DroneAltitudeKeeper>(out var altitudeKeeper))
+            {
+                altitudeKeeper.enabled = false;
+            }
+        }
+
+        if (communicationHub != null)
+        {
+            communicationHub.enabled = false;
+        }
+        if (commandRoutePlanner != null)
+        {
+            commandRoutePlanner.enabled = false;
+        }
+
+        Explorer ownedHumanExplorer = ResolveOwnedExplorer();
+        if (ownedHumanExplorer != null)
+        {
+            ownedHumanExplorer.StopAfterFoundByDrone();
+            ownedHumanExplorer.enabled = false;
+        }
     }
 
     private void OnValidate()
@@ -204,16 +964,48 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
     private void ClearRuntimeState()
     {
-        ClearSpawnedObjects();
-        explorers.Clear();
-        communicationNodes.Clear();
-        directTargetReporterIds.Clear();
+        if (replayRuntimeState != null && !replayRuntimeState.RuntimeCaptured)
+        {
+            ReplayRuntimeState retained = replayRuntimeState;
+            retained.SpawnedObjects.AddRange(spawnedObjects);
+            retained.Explorers.AddRange(explorers);
+            retained.CommunicationNodes.AddRange(communicationNodes);
+            retained.DirectTargetReporterIds.UnionWith(directTargetReporterIds);
+            retained.DroneCameras.AddRange(droneCameras);
+            retained.DroneCameraViews.AddRange(droneCameraViews);
+            retained.DroneCameraTextures.AddRange(droneCameraTextures);
+            retained.World = world;
+            retained.CommunicationHub = communicationHub;
+            retained.CommandRoutePlanner = commandRoutePlanner;
+            retained.CommandState = commandState;
+            retained.DebugRenderer = debugRenderer;
+            retained.RuntimeCaptured = true;
+
+            spawnedObjects.Clear();
+            explorers.Clear();
+            communicationNodes.Clear();
+            directTargetReporterIds.Clear();
+            droneCameras.Clear();
+            droneCameraViews.Clear();
+            droneCameraTextures.Clear();
+            world = null;
+            communicationHub = null;
+            commandRoutePlanner = null;
+            commandState = null;
+            debugRenderer = null;
+        }
+        else
+        {
+            ClearSpawnedObjects();
+            explorers.Clear();
+            communicationNodes.Clear();
+            directTargetReporterIds.Clear();
+            droneCameras.Clear();
+            droneCameraViews.Clear();
+            ReleaseDroneCameraTextures();
+        }
+
         missionComplete = false;
-        droneCameras.Clear();
-        droneCameraViews.Clear();
-        cachedExplorers.Clear();
-        nextExplorerCacheRefreshAt = -1f;
-        ReleaseDroneCameraTextures();
     }
 
     private void BuildWorld()
@@ -649,44 +1441,88 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         }
     }
 
-    private List<Explorer> GetAliveExplorers()
+    private IEnumerable<Explorer> GetAliveExplorers()
     {
-        // only rescan when a cached entry is destroyed or the periodic refresh window elapses.
-        bool needsRefresh = Time.time >= nextExplorerCacheRefreshAt;
-        for (int i = 0; i < cachedExplorers.Count; i++)
+        Explorer ownedExplorer = ResolveOwnedExplorer();
+        if (ownedExplorer != null)
         {
-            if (cachedExplorers[i] == null)
-            {
-                needsRefresh = true;
-                break;
-            }
+            yield return ownedExplorer;
         }
-
-        if (!needsRefresh)
-        {
-            return cachedExplorers;
-        }
-
-        cachedExplorers.Clear();
-        cachedExplorers.AddRange(FindObjectsByType<Explorer>(FindObjectsSortMode.None));
-        nextExplorerCacheRefreshAt = Time.time + 2f;
-        return cachedExplorers;
     }
 
-    private void BeginTelemetrySession()
+    private Explorer ResolveOwnedExplorer()
+    {
+        // A configured ScriptsControl is authoritative so replay/batch staging can
+        // replace its Explorer without leaving this bootstrap attached to the old one.
+        if (scriptsControlOwner != null
+            && scriptsControlOwner.droneSwarmDemoBootstrap == this)
+        {
+            // Null is meaningful while a staged world is between Explorers; do not
+            // fall back to a stale serialized reference during that transition.
+            return scriptsControlOwner.explorer;
+        }
+
+        if (humanExplorer != null)
+        {
+            return humanExplorer;
+        }
+
+        // Compatibility for scenes serialized before humanExplorer was introduced:
+        // inspect only explicit bootstrap -> ScriptsControl links. Never infer an
+        // Explorer from a scene-wide Explorer search, because another simulation may
+        // own it. Multiple different configured Explorers are intentionally treated
+        // as ambiguous and left untouched.
+        ScriptsControl resolvedOwner = null;
+        Explorer resolvedExplorer = null;
+        foreach (ScriptsControl candidate in FindObjectsByType<ScriptsControl>(
+                     FindObjectsInactive.Include,
+                     FindObjectsSortMode.None))
+        {
+            if (candidate == null
+                || candidate.droneSwarmDemoBootstrap != this
+                || candidate.explorer == null)
+            {
+                continue;
+            }
+
+            if (resolvedExplorer != null && candidate.explorer != resolvedExplorer)
+            {
+                return null;
+            }
+
+            resolvedOwner = candidate;
+            resolvedExplorer = candidate.explorer;
+        }
+
+        if (resolvedOwner != null)
+        {
+            scriptsControlOwner = resolvedOwner;
+        }
+
+        return resolvedExplorer;
+    }
+
+    private bool TryBeginTelemetrySession()
     {
         if (!telemetryEnabled)
         {
-            return;
+            return true;
         }
 
         var recorder = EnsureTelemetryRecorder();
         if (recorder == null)
         {
-            return;
+            Debug.LogError("[DroneTelemetry] Cannot start telemetry because no recorder is available.", this);
+            return false;
         }
 
-        recorder.BeginSession(BuildTelemetryConfig());
+        if (recorder.TryBeginSession(BuildTelemetryConfig()))
+        {
+            return true;
+        }
+
+        Debug.LogError($"[DroneTelemetry] Session start failed: {recorder.LastPersistenceError}", this);
+        return false;
     }
 
     private DroneMissionTelemetryRecorder EnsureTelemetryRecorder()
@@ -705,12 +1541,30 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         return telemetryRecorder;
     }
 
-    private void EndTelemetrySession(string endReason, bool completed)
+    private bool EndTelemetrySession(string endReason, bool completed)
     {
-        if (telemetryRecorder != null && telemetryRecorder.HasActiveSession)
+        if (telemetryRecorder == null
+            || (!telemetryRecorder.HasActiveSession && !telemetryRecorder.HasPendingSessionEnd))
         {
-            telemetryRecorder.EndSession(endReason, completed);
+            // A recorder end can be recovered through its public API or batch
+            // readiness. In either case, no genuine pending transaction remains,
+            // so retire any stale bootstrap gate and its sleeping retry waiter.
+            MarkFinalTelemetryPersistenceComplete();
+            return true;
         }
+
+        bool persisted = telemetryRecorder.TryEndSession(endReason, completed);
+        if (!persisted)
+        {
+            finalTelemetryPersistencePending = telemetryRecorder.HasPendingSessionEnd;
+            Debug.LogError($"[DroneTelemetry] Session end remains pending: {telemetryRecorder.LastPersistenceError}", this);
+        }
+        else
+        {
+            MarkFinalTelemetryPersistenceComplete();
+        }
+
+        return persisted;
     }
 
     private void RecordTelemetryTargetFound(int reporterId, DroneNative.DroneVec3i cell)
@@ -773,7 +1627,23 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             return;
         }
 
-        telemetryRecorder.EndSession("timeout", false);
+        if (IsBatchRun)
+        {
+            // A telemetry timeout is a run boundary, not merely a recording
+            // boundary. Freeze every runtime component before the runner observes
+            // the inactive session and starts its delay or replacement-world work.
+            ShutdownBatchRun("timeout", false);
+            return;
+        }
+
+        // Let an active interactive game flow choose its established search/return
+        // timeout reason and result state. If no flow owns this simulation, still
+        // stop it coherently rather than leaving an unrecorded world running.
+        GameFlowController gameFlow = FindAnyObjectByType<GameFlowController>();
+        if (gameFlow == null || !gameFlow.TryHandleTelemetryTimeout() || !gameplayStopped)
+        {
+            StopSimulation("timeout", false);
+        }
     }
 
     private void RecordTelemetryMissionComplete()
@@ -941,10 +1811,22 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
             return;
         }
 
+        CompleteNaturalMission();
+    }
+
+    private void CompleteNaturalMission()
+    {
         missionComplete = true;
         UpdateTelemetryMilestones();
         RecordTelemetryMissionComplete();
-        EndTelemetrySession("mission_complete", true);
+        if (!EndTelemetrySession("mission_complete", true))
+        {
+            // Natural completion uses the same realtime, bounded recovery path as
+            // an explicit stop. The active telemetry session remains visible to
+            // batch runners until recovery succeeds or becomes terminal.
+            StartFinalTelemetryRetryIfNeeded();
+        }
+
         foreach (var explorer in explorers)
         {
             if (explorer != null)
@@ -1149,6 +2031,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         {
             if (spawnedObjects[i] != null)
             {
+                spawnedObjects[i].SetActive(false);
                 Destroy(spawnedObjects[i]);
             }
         }
