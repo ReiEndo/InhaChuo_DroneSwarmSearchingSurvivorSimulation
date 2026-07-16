@@ -383,6 +383,10 @@ public class GameFlowController : MonoBehaviour
         endReason = reason;
         gameEndTime = Time.time - gameStartTime;
 
+        // Result smoke belongs to the result lifecycle, not to whichever drone's
+        // Update happens to observe completion first. This also covers force-end.
+        DroneMissionEndReporter.EnsureTargetSmokeForResult();
+
         StopSimulation(reason);
         ShowResultScreen();
     }

@@ -8,6 +8,39 @@ using UnityEngine.TestTools;
 public sealed class MapTargetMarkerControllerPlayModeTests
 {
     [UnityTest]
+    public IEnumerator MarkerCreatedBeforeExplicitInitializationUsesMarkerLayer()
+    {
+        GameObject controllerObject = new GameObject("map-marker-early-create-test");
+        Type controllerType = GetControllerType();
+        Component controller = controllerObject.AddComponent(controllerType);
+
+        GameObject marker = CreateOwnedMarker(controllerType, controller, "early-marker");
+
+        Assert.That(marker.layer, Is.EqualTo(LayerMask.NameToLayer("Marker")));
+
+        UnityEngine.Object.Destroy(controllerObject);
+        yield return null;
+    }
+
+    [UnityTest]
+    public IEnumerator ExplicitInitializationRepairsExistingMarkerLayer()
+    {
+        GameObject controllerObject = new GameObject("map-marker-layer-repair-test");
+        Type controllerType = GetControllerType();
+        Component controller = controllerObject.AddComponent(controllerType);
+        GameObject marker = CreateOwnedMarker(controllerType, controller, "existing-marker");
+        marker.layer = 0;
+        GetField(controllerType, "explorerMarker").SetValue(controller, marker);
+
+        InvokeStart(controllerType, controller);
+
+        Assert.That(marker.layer, Is.EqualTo(LayerMask.NameToLayer("Marker")));
+
+        UnityEngine.Object.Destroy(controllerObject);
+        yield return null;
+    }
+
+    [UnityTest]
     public IEnumerator RemovingComponentDestroysOwnedMarkersButPreservesAuthoredChildren()
     {
         GameObject controllerObject = new GameObject("map-marker-controller-removal-test");

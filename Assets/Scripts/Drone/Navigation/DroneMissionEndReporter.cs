@@ -40,6 +40,41 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
         s_TargetSmokeSpawned = false;
     }
 
+    public static bool EnsureTargetSmokeForResult()
+    {
+        if (s_TargetSmokeSpawned)
+        {
+            return true;
+        }
+
+        DroneMissionEndReporter reporter = FindAnyObjectByType<DroneMissionEndReporter>(
+            FindObjectsInactive.Include
+        );
+        Explorer explorer = FindAnyObjectByType<Explorer>(FindObjectsInactive.Include);
+        DroneDemoGridWorld world = reporter != null && reporter.sensor != null
+            ? reporter.sensor.World
+            : FindAnyObjectByType<DroneDemoGridWorld>(FindObjectsInactive.Include);
+
+        if (reporter == null || explorer == null || world == null)
+        {
+            return false;
+        }
+
+        if (reporter.targetSmokePrefab == null)
+        {
+            reporter.targetSmokePrefab = Resources.Load<ParticleSystem>(
+                reporter.targetSmokeResourcePath
+            );
+        }
+
+        DroneNative.DroneVec3i targetCell = world.WorldToGrid(explorer.transform.position);
+        reporter.SpawnTargetSmokeOnce(
+            new DroneTargetReport(targetCell, Time.time, -1),
+            world
+        );
+        return s_TargetSmokeSpawned;
+    }
+
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
     private static void ResetStaticState()
     {
@@ -147,6 +182,8 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
             Quaternion.identity
         );
 
+        // Parenting prevents interrupted replay teardown from leaking smoke objects.
+        smoke.transform.SetParent(transform, true);
         smoke.Play();
 
         StartCoroutine(StopAndDestroySmoke(smoke));

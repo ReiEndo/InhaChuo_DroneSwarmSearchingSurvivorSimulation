@@ -1150,6 +1150,29 @@ public sealed class DroneMissionBatchRunnerLifecycleTests
     }
 
     [Test]
+    public void FailedInitialSetupDeactivationDoesNotBlockOrdinaryRetry()
+    {
+        SetField(bootstrap, "telemetryEnabled", false);
+        SetField(bootstrap, "runtimeConfigInitialized", true);
+        InvokePublic(bootstrap, "RollbackInitialStartup");
+
+        ((Behaviour)bootstrap).enabled = false;
+        InvokePrivate(bootstrap, "OnDisable");
+
+        Assert.That(GetProperty<bool>(bootstrap, "IsGameplayStopped"), Is.False);
+
+        ((Behaviour)bootstrap).enabled = true;
+        Assert.That((bool)InvokePublic(bootstrap, "TryResetDemo"), Is.True);
+        Coroutine queuedCoroutine = (Coroutine)GetField(bootstrap, "resetCoroutine");
+        if (queuedCoroutine != null)
+        {
+            ((MonoBehaviour)bootstrap).StopCoroutine(queuedCoroutine);
+            SetField(bootstrap, "resetCoroutine", null);
+        }
+        SetField(bootstrap, "resetQueued", false);
+    }
+
+    [Test]
     public void InitialQueuedResetDisableKeepsInitialBoundaryAndReenabledResetSucceeds()
     {
         SetField(bootstrap, "telemetryEnabled", false);
@@ -1402,6 +1425,32 @@ public sealed class DroneMissionBatchRunnerLifecycleTests
             {
                 UnityEngine.Object.DestroyImmediate(testedObject);
             }
+        }
+    }
+
+    [Test]
+    public void NaturalCompletionNotifiesInteractiveGameFlow()
+    {
+        var gameFlowObject = new GameObject("natural-completion-game-flow-test");
+        Component gameFlow = gameFlowObject.AddComponent(RequireType("GameFlowController, Assembly-CSharp"));
+
+        try
+        {
+            SetField(bootstrap, "telemetryEnabled", false);
+            SetField(gameFlow, "gameRunning", true);
+            SetField(gameFlow, "resultShown", false);
+            SetField(gameFlow, "gameStartTime", Time.time - 10f);
+            SetField(gameFlow, "foundTime", 2f);
+
+            InvokePrivate(bootstrap, "CompleteNaturalMission");
+
+            Assert.That((bool)GetField(gameFlow, "gameRunning"), Is.False);
+            Assert.That((bool)GetField(gameFlow, "resultShown"), Is.True);
+            Assert.That(GetField(gameFlow, "endReason").ToString(), Is.EqualTo("Success"));
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(gameFlowObject);
         }
     }
 

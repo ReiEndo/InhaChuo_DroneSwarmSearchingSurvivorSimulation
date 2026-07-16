@@ -33,9 +33,15 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private float nextRefreshTime;
     private int markerLayer;
+    private bool markerLayerResolved;
 
     private Explorer cachedExplorer;
     private DroneFrontierExplorer[] cachedDrones = System.Array.Empty<DroneFrontierExplorer>();
+
+    private void Awake()
+    {
+        ResolveMarkerLayer();
+    }
 
     public void MapCameraMarker_Start()
     {
@@ -44,24 +50,30 @@ public class MapTargetMarkerController : MonoBehaviour
             terrain = FindAnyObjectByType<Terrain>();
         }
 
-        if (markerLayerName == "Default")
+        ResolveMarkerLayer();
+        EnsureMaterials();
+        RebindMarkerMaterials();
+        RebindMarkerLayers();
+
+        RefreshMarkers();
+        ApplyMarkerVisibility();
+    }
+
+    private void ResolveMarkerLayer()
+    {
+        if (string.IsNullOrWhiteSpace(markerLayerName) || markerLayerName == "Default")
         {
             markerLayerName = "Marker";
         }
 
         markerLayer = LayerMask.NameToLayer(markerLayerName);
+        markerLayerResolved = true;
 
         if (markerLayer < 0)
         {
             Debug.LogWarning($"{markerLayerName} レイヤーが見つかりません。Defaultを使用します。");
             markerLayer = 0;
         }
-
-        EnsureMaterials();
-        RebindMarkerMaterials();
-
-        RefreshMarkers();
-        ApplyMarkerVisibility();
     }
 
     private void LateUpdate()
@@ -214,6 +226,11 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private GameObject CreateMarker(string markerName, Material material, float size)
     {
+        if (!markerLayerResolved)
+        {
+            ResolveMarkerLayer();
+        }
+
         GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         marker.name = markerName;
 
@@ -263,6 +280,24 @@ public class MapTargetMarkerController : MonoBehaviour
         for (int i = 0; i < droneMarkers.Count; i++)
         {
             SetMarkerMaterial(droneMarkers[i], droneMaterial);
+        }
+    }
+
+    private void RebindMarkerLayers()
+    {
+        SetMarkerLayer(explorerMarker);
+
+        for (int i = 0; i < droneMarkers.Count; i++)
+        {
+            SetMarkerLayer(droneMarkers[i]);
+        }
+    }
+
+    private void SetMarkerLayer(GameObject marker)
+    {
+        if (marker != null)
+        {
+            marker.layer = markerLayer;
         }
     }
 
