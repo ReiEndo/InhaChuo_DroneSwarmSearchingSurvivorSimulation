@@ -68,6 +68,60 @@ public sealed class TerrainGeneratorBoundsTests
         Assert.That(resolution, Is.EqualTo(expectedResolution));
     }
 
+    [Test]
+    public void ReplayGenerationPreservesTerrainLayersAndAlphamaps()
+    {
+        var sourceData = new TerrainData
+        {
+            heightmapResolution = 33,
+            size = new Vector3(20f, 10f, 30f),
+            alphamapResolution = 16,
+            baseMapResolution = 16
+        };
+        var firstLayer = new TerrainLayer();
+        var secondLayer = new TerrainLayer();
+
+        try
+        {
+            sourceData.terrainLayers = new[] { firstLayer, secondLayer };
+            var sourceAlphamaps = new float[16, 16, 2];
+            for (int z = 0; z < 16; z++)
+            {
+                for (int x = 0; x < 16; x++)
+                {
+                    sourceAlphamaps[z, x, 0] = 0.25f;
+                    sourceAlphamaps[z, x, 1] = 0.75f;
+                }
+            }
+            sourceData.SetAlphamaps(0, 0, sourceAlphamaps);
+
+            MethodInfo method = generatorType.GetMethod(
+                "TryGenerateReplayTerrainData",
+                BindingFlags.Instance | BindingFlags.Public
+            );
+            Assert.That(method, Is.Not.Null);
+            Assert.That(
+                (bool)method.Invoke(generator, new object[] { terrainData, sourceData }),
+                Is.True
+            );
+
+            CollectionAssert.AreEqual(sourceData.terrainLayers, terrainData.terrainLayers);
+            Assert.That(terrainData.alphamapResolution, Is.EqualTo(sourceData.alphamapResolution));
+            Assert.That(terrainData.baseMapResolution, Is.EqualTo(sourceData.baseMapResolution));
+
+            float[,,] copiedAlphamaps = terrainData.GetAlphamaps(0, 0, 16, 16);
+            Assert.That(copiedAlphamaps[8, 8, 0], Is.EqualTo(0.25f).Within(0.0001f));
+            Assert.That(copiedAlphamaps[8, 8, 1], Is.EqualTo(0.75f).Within(0.0001f));
+        }
+        finally
+        {
+            terrainData.terrainLayers = Array.Empty<TerrainLayer>();
+            UnityEngine.Object.DestroyImmediate(sourceData);
+            UnityEngine.Object.DestroyImmediate(firstLayer);
+            UnityEngine.Object.DestroyImmediate(secondLayer);
+        }
+    }
+
     [TestCase(513, 128)]
     [TestCase(128, 513)]
     public void OversizedDirectInputFailsBeforeMutatingTerrainData(int width, int depth)

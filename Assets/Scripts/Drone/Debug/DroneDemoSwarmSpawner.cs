@@ -95,7 +95,8 @@ public sealed class DroneDemoSwarmSpawner
             explorer.PlannerType = plannerType;
             explorers.Add(explorer);
 
-            drone.AddComponent<DroneAltitudeKeeper>();
+            var altitudeKeeper = drone.AddComponent<DroneAltitudeKeeper>();
+            altitudeKeeper.Configure(world.SurfaceTerrain, DroneFlightAltitude);
             drone.AddComponent<DroneFoundSignalMarker>();
             drone.AddComponent<DroneMissionEndReporter>();
 
@@ -135,7 +136,7 @@ public sealed class DroneDemoSwarmSpawner
             }
         }
 
-        // Last-resort fallback keeps cells unique even if the preferred padding/spawnable margin is unavailable.
+        // Fallback keeps cells unique when the preferred margin is unavailable.
         if (starts.Count < count)
         {
             AddStartsFromCandidates(world, width, starts, usedCells, BuildAllGridCandidates(width, depth), false, count, 0);

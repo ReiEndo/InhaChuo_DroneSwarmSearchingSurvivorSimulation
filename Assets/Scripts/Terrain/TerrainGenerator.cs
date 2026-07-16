@@ -7,8 +7,7 @@ public class TerrainGenerator : MonoBehaviour
 {
     public const int MinWorldDimension = 4;
 
-    // Generation is synchronous. A 512-unit limit bounds a generation to a 513²
-    // heightmap (263,169 samples and 789,507 Perlin evaluations).
+    // Caps synchronous generation at a 513² heightmap.
     public const int MaxWorldDimension = 512;
     public const int MinHeightmapResolution = 33;
     public const int MaxHeightmapResolution = MaxWorldDimension + 1;
@@ -22,9 +21,7 @@ public class TerrainGenerator : MonoBehaviour
     public float scale = 250f;
     public float terrainHeight = 50f;
 
-    // Replay TerrainData instances are runtime-owned. The TerrainData that was
-    // assigned before the first replay is borrowed (normally a project asset) and
-    // must never be destroyed by this component.
+    // Runtime replay data is owned; the original TerrainData is borrowed.
     private TerrainData originalTerrainData;
     private TerrainData ownedRuntimeTerrainData;
     private bool originalTerrainDataCaptured;
@@ -33,14 +30,6 @@ public class TerrainGenerator : MonoBehaviour
 
     public int HeightmapResolution => GetHeightmapResolution(widthx, widthz);
     public TerrainData OwnedRuntimeTerrainData => ownedRuntimeTerrainData;
-
-    /*
-    ScriptControl.csにて制御
-    void Start()
-    {
-        GenerateTerrain();
-    }
-    */
 
     // Kept as a void wrapper so existing UnityEvent bindings remain valid.
     public void GenerateTerrain()
@@ -59,10 +48,7 @@ public class TerrainGenerator : MonoBehaviour
         return TryGenerateTerrainData(terrain.terrainData);
     }
 
-    /// <summary>
-    /// Generates into caller-owned data. Replay uses this to prepare a terrain without
-    /// changing the Terrain component (and therefore the retained result world).
-    /// </summary>
+    /// <summary>Generates into caller-owned data without changing the live Terrain.</summary>
     public bool TryGenerateTerrainData(TerrainData data)
     {
         if (data == null)
@@ -151,6 +137,47 @@ public class TerrainGenerator : MonoBehaviour
         return true;
     }
 
+    /// <summary>Generates replay data while preserving layers and splat maps.</summary>
+    public bool TryGenerateReplayTerrainData(TerrainData data, TerrainData renderingSource)
+    {
+        if (!TryGenerateTerrainData(data))
+        {
+            return false;
+        }
+
+        if (renderingSource == null)
+        {
+            Debug.LogError("[TerrainGenerator] Replay rendering source is required.", this);
+            return false;
+        }
+
+        try
+        {
+            TerrainLayer[] layers = renderingSource.terrainLayers;
+            data.terrainLayers = layers;
+            data.alphamapResolution = renderingSource.alphamapResolution;
+            data.baseMapResolution = renderingSource.baseMapResolution;
+
+            if (layers.Length > 0 && renderingSource.alphamapLayers > 0)
+            {
+                float[,,] alphamaps = renderingSource.GetAlphamaps(
+                    0,
+                    0,
+                    renderingSource.alphamapWidth,
+                    renderingSource.alphamapHeight
+                );
+                data.SetAlphamaps(0, 0, alphamaps);
+            }
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError($"[TerrainGenerator] Could not copy replay terrain rendering data: {exception.Message}", this);
+            return false;
+        }
+
+        return true;
+    }
+
     public sealed class TerrainPublication
     {
         internal TerrainData PublishedData;
@@ -160,10 +187,7 @@ public class TerrainGenerator : MonoBehaviour
         internal bool Active;
     }
 
-    /// <summary>
-    /// Publishes replay data without retiring displaced owned data. The caller must
-    /// commit or roll back the returned publication.
-    /// </summary>
+    /// <summary>Publishes replay data while retaining displaced data for rollback.</summary>
     public bool TryBeginRuntimeTerrainDataAdoption(
         TerrainData runtimeData,
         out TerrainPublication publication)
@@ -249,7 +273,6 @@ public class TerrainGenerator : MonoBehaviour
         if (terrain != null) terrain.terrainData = publication.DisplacedData;
     }
 
-    /// <summary>Immediately adopts data for non-transactional legacy callers.</summary>
     public bool TryAdoptRuntimeTerrainData(TerrainData runtimeData)
     {
         if (!TryBeginRuntimeTerrainDataAdoption(runtimeData, out TerrainPublication publication))
@@ -265,8 +288,7 @@ public class TerrainGenerator : MonoBehaviour
         TerrainData ownedData = ownedRuntimeTerrainData;
         ownedRuntimeTerrainData = null;
 
-        // Restore every collider whose assignment was transactionally managed, not
-        // just Unity's usual co-located TerrainCollider arrangement.
+        // Restore every transactionally managed collider, including child colliders.
         foreach (KeyValuePair<TerrainCollider, TerrainData> assignment in originalColliderData)
         {
             if (assignment.Key != null)
@@ -276,13 +298,10 @@ public class TerrainGenerator : MonoBehaviour
         }
         originalColliderData.Clear();
 
-        // Detach our data before destroying it. Restoring the borrowed original also
-        // keeps a surviving Terrain valid when only this controller is torn down.
+        // Restore borrowed data before destroying owned data.
         if (ownedData != null && terrain != null && terrain.terrainData == ownedData)
         {
-            // Clear first so Unity releases its native reference before the ownership
-            // scan; directly swapping data can retain the displaced native object until
-            // a later terrain synchronization pass.
+            // Clearing first releases Unity's native reference before the ownership scan.
             terrain.terrainData = null;
             if (originalTerrainDataCaptured && originalTerrainData != null)
             {
@@ -301,11 +320,7 @@ public class TerrainGenerator : MonoBehaviour
             return associated;
         }
 
-        // Data equality is not an ownership relationship: multiple Terrain renderers
-        // may intentionally share one project asset. Only synchronize colliders in the
-        // configured Terrain's hierarchy whose nearest Terrain owner is that Terrain.
-        // This includes the usual co-located collider and dedicated child colliders,
-        // while excluding colliders belonging to a nested Terrain renderer.
+        // Associate by hierarchy ownership, not shared TerrainData identity.
         TerrainCollider[] childColliders = terrain.GetComponentsInChildren<TerrainCollider>(true);
         foreach (TerrainCollider terrainCollider in childColliders)
         {
@@ -326,9 +341,7 @@ public class TerrainGenerator : MonoBehaviour
             return;
         }
 
-        // Unlike publication association, lifetime safety is deliberately global.
-        // Runtime data can be shared deliberately. Do not destroy it while any loaded
-        // renderer or collider, including an inactive one, still uses it.
+        // Runtime data may be shared; scan globally before destroying it.
         Terrain[] sceneTerrains = FindObjectsByType<Terrain>(
             FindObjectsInactive.Include);
         foreach (Terrain sceneTerrain in sceneTerrains)

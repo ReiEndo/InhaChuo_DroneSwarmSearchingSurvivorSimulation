@@ -50,8 +50,7 @@ public class ScriptsControl : MonoBehaviour
 
     private IEnumerator Start()
     {
-        // Let GameFlowController own auto-start when one is present so settings and
-        // game timers are applied only after asynchronous world startup succeeds.
+        // GameFlowController gates its own auto-start on asynchronous setup.
         yield return null;
         if (autoStart && !started && FindAnyObjectByType<GameFlowController>() == null)
         {
@@ -71,10 +70,7 @@ public class ScriptsControl : MonoBehaviour
         });
     }
 
-    /// <summary>
-    /// Queues startup. A true return value means the request was accepted, not that
-    /// asynchronous reset work has completed. Observe IsStarted or use the Async API.
-    /// </summary>
+    /// <summary>Returns acceptance; completion remains asynchronous.</summary>
     public bool TryStartSimulation()
     {
         return TryStartSimulationAsync(null);
@@ -91,7 +87,6 @@ public class ScriptsControl : MonoBehaviour
         return TrySetupSimulation(false, completion);
     }
 
-    /// <summary>Queues an explicit same-scene new game.</summary>
     public bool TryStartNewSimulation()
     {
         return TryStartNewSimulationAsync(null);
@@ -119,7 +114,6 @@ public class ScriptsControl : MonoBehaviour
         return TrySetupSimulation(true, completion);
     }
 
-    /// <summary>Cancels an accepted startup request without waiting on the main thread.</summary>
     public void CancelPendingStart(string reason = null)
     {
         if (!setupInProgress)
@@ -133,7 +127,6 @@ public class ScriptsControl : MonoBehaviour
 
         if (waitingForReset && droneSwarmDemoBootstrap != null && droneSwarmDemoBootstrap.IsResetQueued)
         {
-            // CancelQueuedReset synchronously reports completion to OnResetCompleted.
             droneSwarmDemoBootstrap.CancelQueuedReset(error);
             return;
         }
@@ -198,9 +191,7 @@ public class ScriptsControl : MonoBehaviour
 
                 if (!batchAutoStartEnabled)
                 {
-                    // Forest spawning is additive and explorer setup mutates live runtime
-                    // state. Any failure from this point must return initial startup to an
-                    // empty baseline before Start can be retried.
+                    // Failures after live mutation must restore the initial empty state.
                     pendingInitialRollbackRequired = true;
                     if (!forestSpawner.TrySpawnTrees())
                     {
@@ -224,8 +215,7 @@ public class ScriptsControl : MonoBehaviour
                 return true;
             }
 
-            // Subscribe before queueing so every accepted reset has one observable
-            // completion path, including cancellation/deactivation.
+            // Subscribe first so every accepted reset reports completion.
             droneSwarmDemoBootstrap.ResetCompleted += OnResetCompleted;
             waitingForReset = true;
             replayCommitExceptionInjection?.Invoke("reset_queue");
@@ -260,7 +250,6 @@ public class ScriptsControl : MonoBehaviour
                 droneSwarmDemoBootstrap.CancelPreparedNewGame();
             }
 
-            // For an accepted reset, OnResetCompleted owns the setup latch.
             if (!remainsAsynchronous && setupInProgress)
             {
                 FinishSetup(false, "Simulation setup did not complete.");
@@ -279,7 +268,8 @@ public class ScriptsControl : MonoBehaviour
         try
         {
             stagedData = new TerrainData();
-            if (!terrainGenerator.TryGenerateTerrainData(stagedData))
+            TerrainData liveTerrainData = terrainGenerator.terrain.terrainData;
+            if (!terrainGenerator.TryGenerateReplayTerrainData(stagedData, liveTerrainData))
             {
                 Debug.LogError("[ScriptsControl] Terrain generation failed; retained replay world was not changed.", this);
                 error = "Terrain generation failed.";
@@ -315,8 +305,7 @@ public class ScriptsControl : MonoBehaviour
                 return false;
             }
 
-            // Re-check every fallible eligibility condition before opening the
-            // rollback-capable publication. Activation does not retire result drones.
+            // Recheck eligibility before opening the rollback-capable publication.
             if (!droneSwarmDemoBootstrap.CanActivatePreparedNewGame()
                 || !droneSwarmDemoBootstrap.TryActivatePreparedNewGame())
             {
@@ -369,9 +358,7 @@ public class ScriptsControl : MonoBehaviour
             DestroyTransient(stagedForestObject);
             if (terrainDataOwnershipTransferred && stagedTerrainObject != null)
             {
-                // The live Terrain now owns this data. Remove staging references before
-                // its deferred GameObject destruction so teardown cannot mistake the
-                // temporary Terrain/Collider for a real shared owner.
+                // Detach staging references after ownership transfers to the live Terrain.
                 Terrain stagedTerrain = stagedTerrainObject.GetComponent<Terrain>();
                 TerrainCollider stagedCollider = stagedTerrainObject.GetComponent<TerrainCollider>();
                 if (stagedTerrain != null) stagedTerrain.terrainData = null;
@@ -390,9 +377,7 @@ public class ScriptsControl : MonoBehaviour
         ForestSpawner stagedForest,
         out Vector3 spawnPosition)
     {
-        // Keep retained result visuals visible during staging, but prevent only their
-        // colliders from contaminating global Physics queries against the replacement.
-        // Staged forest colliders and unrelated world obstacles remain active.
+        // Exclude retained-result colliders from staging physics without hiding visuals.
         Collider[] retainedColliders = forestSpawner != null && forestSpawner != stagedForest
             ? forestSpawner.GetComponentsInChildren<Collider>(true)
             : Array.Empty<Collider>();
@@ -431,8 +416,7 @@ public class ScriptsControl : MonoBehaviour
         if (transientObject == null) return;
         if (transientObject is GameObject transientGameObject)
         {
-            // Destroy is deferred in play mode; make staged colliders/terrain
-            // unobservable immediately on both success and rollback.
+            // Disable immediately because play-mode destruction is deferred.
             transientGameObject.SetActive(false);
         }
         if (Application.isPlaying) Destroy(transientObject);
@@ -461,8 +445,7 @@ public class ScriptsControl : MonoBehaviour
 
         try
         {
-            // Runtime UI is initialized only after the world and required telemetry
-            // session are both committed.
+            // Initialize UI only after world and telemetry setup commits.
             uiScriptsControl.UI_Start();
             FinishSetup(true, string.Empty);
         }
@@ -476,8 +459,7 @@ public class ScriptsControl : MonoBehaviour
 
     private void CommitReplayPublication(ReplayWorldPublication publication)
     {
-        // The reset and UI startup have succeeded. Only now may retained result-world
-        // resources be retired.
+        // Retire the previous result world only after reset and UI startup succeed.
         droneSwarmDemoBootstrap?.CommitPreparedNewGame();
         forestSpawner?.CommitAdoptSpawnedTrees(publication.Forest);
         terrainGenerator?.CommitRuntimeTerrainDataAdoption(publication.Terrain);
@@ -486,7 +468,6 @@ public class ScriptsControl : MonoBehaviour
 
     private void RollbackReplayPublication(ReplayWorldPublication publication)
     {
-        // Restore consumers before restoring the data/providers they reference.
         droneSwarmDemoBootstrap?.RollbackPreparedNewGame();
         explorer?.RestoreReplayState(publication.Explorer);
         forestSpawner?.RollbackAdoptSpawnedTrees(publication.Forest);
@@ -635,9 +616,7 @@ public class ScriptsControl : MonoBehaviour
 
     private static bool HasBatchAutoStartEnabled()
     {
-        // Include inactive objects so eligibility is explicit rather than dependent on
-        // FindObjectsByType's filtering. Only a runner whose Start can actually run owns
-        // startup; disabled components and inactive hierarchy members must not block it.
+        // Only active, enabled batch runners own startup; inactive ones must not block it.
         foreach (var batchRunner in FindObjectsByType<DroneMissionBatchRunner>(
                      FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
