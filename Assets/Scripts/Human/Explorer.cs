@@ -10,55 +10,55 @@ public class Explorer : MonoBehaviour
 {
     private const int InitialSpawnClearancePassCount = 3;
 
-    private CharacterController controller;//移動方法にCharacterController.Moveを採用
+    private CharacterController controller;
 
     [Header("Terrain")]
     public Terrain terrain;
 
     [Header("探索")]
-    public float scanRadius = 20f;  //目標地点最大範囲
-    public float minTargetDistance = 10f;   //目標地点最小範囲
-    public float moveSpeed = 3f;    //移動速度
+    public float scanRadius = 20f;
+    public float minTargetDistance = 10f;
+    public float moveSpeed = 3f;
     [SerializeField] private float edgeCenterSteerDistance = 20f;
     [Range(0f, 1f)]
     [SerializeField] private float edgeCenterSteerStrength = 0.85f;
-    public float obstacleCheckDistance = 1f;    //障害物検知距離
-    public float obstacleAvoidDuration = 1.0f;  //回避方向を維持する時間
-    public float obstacleAvoidAngle = 55f;      //回避時に左右へ曲がる角度
-    private float avoidTimer = 0f;  //0f<=移動中 or 0f>回避中
-    public float terrainMargin = 10f;   //terrain境界からどこまでをNGとするか
+    public float obstacleCheckDistance = 1f;
+    public float obstacleAvoidDuration = 1.0f;
+    public float obstacleAvoidAngle = 55f;
+    private float avoidTimer = 0f;
+    public float terrainMargin = 10f;
     [SerializeField] private int targetSearchAttempts = 32;
     [SerializeField] private int fallbackTargetSearchAttempts = 96;
     [SerializeField] private float fallbackMinTargetDistance = 3f;
     [SerializeField] private float targetSearchRetryInitialDelay = 0.25f;
     [SerializeField] private float targetSearchRetryMaxDelay = 2f;
 
-    private Vector3 targetPosition;     //目標地点
-    private bool hasTarget = false;     //目標地点が定まっているか
+    private Vector3 targetPosition;
+    private bool hasTarget = false;
     private float nextTargetSearchAt;
     private int consecutiveTargetSearchFailures;
 
     [Header("ドローン発見後")]
-    private bool stoppedAfterDroneFound; //ドローンに発見されたら停止
+    private bool stoppedAfterDroneFound;
 
-    private float verticalVelocity;     //重力用
+    private float verticalVelocity;
     private float nextTargetSearchFailureLogAt;
     
-    public LayerMask obstacleMask;      //地面の障害物判定を除外
-    private bool isAvoiding = false;    //回避開始時だけ回転するようフラッグ
-    private Quaternion avoidRotation;   //瞬時に回転しないよう
+    public LayerMask obstacleMask;
+    private bool isAvoiding = false;
+    private Quaternion avoidRotation;
     
     [Header("体力")]
     [Range(0, 100)]
-    public float stamina = 100f; //体力フル
-    public float staminaDecreasePerSecond = 5f;     //体力減少速度
-    public float staminaRecoveryPerSecond = 7f;     //体力回復速度
-    public float recoveryDecay = 0.2f;              //疲労
-    public float restartThreshold = 50f;  //休憩→移動への体力必要値
+    public float stamina = 100f;
+    public float staminaDecreasePerSecond = 5f;
+    public float staminaRecoveryPerSecond = 7f;
+    public float recoveryDecay = 0.2f;
+    public float restartThreshold = 50f;
     [System.NonSerialized] private bool missionStaminaBaselineCaptured;
     [System.NonSerialized] private float missionStartingStamina;
     [System.NonSerialized] private float missionStartingRecoveryPerSecond;
-    private bool isResting = false;  //true:移動 false:休憩
+    private bool isResting = false;
     [SerializeField] private AnimationClip takingRestClip;
     [SerializeField] private string takingRestClipName = "TakingRest";
     private PlayableGraph restAnimationGraph;
@@ -66,9 +66,9 @@ public class Explorer : MonoBehaviour
 
     [Header("スタック判定")]
     private float lastDistanceToTarget;
-    public float stuckCheckInterval = 3f;   //スタック確認時間間隔
+    public float stuckCheckInterval = 3f;
     public float stuckDistanceThreshold = 1f;
-    private float stuckTimer = 0f;      //スタックタイマー
+    private float stuckTimer = 0f;
 
     [Header("Slope Map")]
     public float maxWalkableSlope = 35f;
@@ -90,19 +90,6 @@ public class Explorer : MonoBehaviour
     private float droneAnnouncementTimer = 0f;
     private Transform nearestDrone;
     private bool readyForMission;
-
-    /*
-    Scripts\ScriptControl\ScriptsControl.csにて制御
-    void Start() //起動時
-    {
-        animator = GetComponent<Animator>();
-
-        controller = GetComponent<CharacterController>();
-
-        TeleportToRandomInitialPosition();
-        BuildSlopeMap();
-    }
-    */
 
     [SerializeField] private Animator animator;
 
@@ -184,8 +171,7 @@ public class Explorer : MonoBehaviour
         }
         finally
         {
-            // Validation may clamp these values. They belong to the retained explorer
-            // until the staged world is committed.
+            // Staging must not retain validation clamps.
             scanRadius = originalScanRadius;
             minTargetDistance = originalMinTargetDistance;
             terrainMargin = originalTerrainMargin;
@@ -296,7 +282,6 @@ public class Explorer : MonoBehaviour
         staminaRecoveryPerSecond = missionStartingRecoveryPerSecond;
     }
 
-    /// <summary>Applies a spawn that was successfully prepared against the committed world.</summary>
     public void CommitPreparedExplorerSpawn(
         Terrain targetTerrain,
         ForestSpawner targetForest,
@@ -318,7 +303,7 @@ public class Explorer : MonoBehaviour
         enabled = true;
     }
 
-    public bool ExplorerSpawner() //ScriptsControl,csのvoid Start()にて起動
+    public bool ExplorerSpawner()
     {
         ResetMissionState();
 
@@ -356,7 +341,7 @@ public class Explorer : MonoBehaviour
         return true;
     }
 
-    void Update() //フレームごとの更新
+    void Update()
     {
         if (stoppedAfterDroneFound)
         {
@@ -395,8 +380,7 @@ public class Explorer : MonoBehaviour
 
         if (!hasTarget)
         {
-            // No terrain-safe target currently exists. Remain idle until the bounded
-            // search is retried instead of repeating its expensive slope checks every frame.
+            // Backoff avoids repeating expensive slope checks every frame.
             SetIdleAnimation();
             return;
         }
@@ -481,7 +465,6 @@ public class Explorer : MonoBehaviour
         return true;
     }
 
-    /// <summary>Clears runtime mission state created by a startup that did not commit.</summary>
     public void RollbackFailedStartup()
     {
         ResetMissionState();
@@ -573,7 +556,7 @@ public class Explorer : MonoBehaviour
         return blockedSlopeMap[x, z];
     }
 
-    void OnDroneAnnouncement() //音の届く距離にdroneがいるかどうか
+    void OnDroneAnnouncement()
     {
         DroneFrontierExplorer[] drones = FindObjectsByType<DroneFrontierExplorer>();
 
@@ -601,7 +584,7 @@ public class Explorer : MonoBehaviour
         SetTargetTowardDrone();
     }
 
-    void SetTargetTowardDrone() //droneの方向へ向かう
+    void SetTargetTowardDrone()
     {
         Vector3 target = nearestDrone.position;
 
@@ -615,7 +598,7 @@ public class Explorer : MonoBehaviour
         }
     }
 
-    void CheckStuck() //スタック時目的地リセット
+    void CheckStuck()
     {
         if (!hasTarget)
         {
@@ -646,7 +629,7 @@ public class Explorer : MonoBehaviour
         stuckTimer = 0f;
     }
 
-    bool IsObstacleAhead() //障害物検知
+    bool IsObstacleAhead()
     {
         return GetObstacleClearance(transform.forward, obstacleCheckDistance) < obstacleCheckDistance;
     }
@@ -683,7 +666,7 @@ public class Explorer : MonoBehaviour
         isAvoiding = true;
     }
 
-    bool TryFindUnknownTarget() //目標地点決定
+    bool TryFindUnknownTarget()
     {
         Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
         if (targetTerrain == null || targetTerrain.terrainData == null)
@@ -701,7 +684,6 @@ public class Explorer : MonoBehaviour
         float centerSteerWeight = GetCenterSteerWeight(targetTerrain);
         Vector3 centerDirection = GetTerrainCenterDirection(targetTerrain);
 
-        // Prefer continuing roughly forward so normal wandering keeps its existing character.
         for (int attempt = 0; attempt < primaryAttempts; attempt++)
         {
             float angle = Random.Range(-60f, 60f);
@@ -720,8 +702,7 @@ public class Explorer : MonoBehaviour
             }
         }
 
-        // If the forward cone is blocked, search all directions with a shorter allowed
-        // distance. This fallback was previously below an unconditional return.
+        // Fall back to a shorter target in any direction.
         float fallbackDistance = Mathf.Clamp(fallbackMinTargetDistance, 0.5f, scanRadius);
         for (int attempt = 0; attempt < fallbackAttempts; attempt++)
         {
@@ -889,7 +870,7 @@ public class Explorer : MonoBehaviour
         );
     }
 
-    bool IsInsideTerrain(Vector3 point) //terrain範囲外への移動防止
+    bool IsInsideTerrain(Vector3 point)
     {
         Terrain targetTerrain = terrain != null ? terrain : Terrain.activeTerrain;
         if (targetTerrain == null)
@@ -913,7 +894,7 @@ public class Explorer : MonoBehaviour
         return insideX && insideZ;
     }
 
-    bool IsValidPoint(Vector3 point) //目標地点が障害物と重なること防止
+    bool IsValidPoint(Vector3 point)
     {
         float checkRadius = 2.0f;
 
@@ -922,7 +903,7 @@ public class Explorer : MonoBehaviour
         return !blocked;
     }
 
-    bool CrossBlockedSlope(Vector3 start, Vector3 end) //現在地点→目標地点　急な斜面防止
+    bool CrossBlockedSlope(Vector3 start, Vector3 end)
     {
         if (terrain == null)
         {
@@ -959,8 +940,6 @@ public class Explorer : MonoBehaviour
 
         stamina = Mathf.Clamp(stamina, 0f, 100f);
 
-        SetIdleAnimation();
-
         if (stamina >= restartThreshold)
         {
             isResting = false;
@@ -971,7 +950,6 @@ public class Explorer : MonoBehaviour
         }
     }
 
-    //改善の必要あり
     void MoveToTarget(bool consumeStamina = true)
     {
         StopRestAnimation();
@@ -1106,7 +1084,6 @@ public class Explorer : MonoBehaviour
         animator.SetFloat("MotionSpeed", 0f);
     }
 
-    /*Explorer初期位置テレポート*/
     public bool TeleportToRandomInitialPosition()
     {
         ResetMissionState();
@@ -1187,8 +1164,7 @@ public class Explorer : MonoBehaviour
         stamina = missionStartingStamina;
         staminaRecoveryPerSecond = missionStartingRecoveryPerSecond;
 
-        // Make the previous run unusable before searching. A failed search must not
-        // leave an old stopped/targeting state and transform available to a new run.
+        // Invalidate the old run before attempting setup for the next one.
         readyForMission = false;
         enabled = false;
         CharacterController cc = controller != null ? controller : GetComponent<CharacterController>();
@@ -1240,8 +1216,7 @@ public class Explorer : MonoBehaviour
             return Mathf.Max(0f, initialTreeDistance * 0.5f);
         }
 
-        // The physics overlap and slope checks still enforce actual safety. This final
-        // pass only drops the extra comfort radius that can cover an entire small map.
+        // The final pass drops only the optional tree-clearance radius.
         return 0f;
     }
 
