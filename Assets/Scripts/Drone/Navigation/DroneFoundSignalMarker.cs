@@ -133,11 +133,7 @@ public sealed class DroneFoundSignalMarker : MonoBehaviour
 
     private Material CreateSignalMaterial()
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit")
-            ?? Shader.Find("Unlit/Color")
-            ?? Shader.Find("Standard");
-
-        Material material = new Material(shader)
+        Material material = new Material(RuntimeUnlitShader.Get())
         {
             name = "Drone Found Signal Material",
             color = signalColor

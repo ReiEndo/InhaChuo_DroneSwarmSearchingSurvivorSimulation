@@ -147,28 +147,6 @@ public class MapTargetMarkerController : MonoBehaviour
         }
     }
 
-    /*private void UpdateExplorerMarker()
-    {
-        if (!showExplorerMarker)
-        {
-            return;
-        }
-
-        if (explorerMarker == null)
-        {
-            return;
-        }
-
-        Explorer explorer = FindAnyObjectByType<Explorer>();
-
-        if (explorer == null)
-        {
-            explorerMarker.SetActive(false);
-            return;
-        }
-
-        explorerMarker.transform.position = GetMarkerPosition(explorer.transform.position);
-    }*/
     private void UpdateExplorerMarker()
     {
         if (cachedExplorer == null || explorerMarker == null)
@@ -179,25 +157,6 @@ public class MapTargetMarkerController : MonoBehaviour
         explorerMarker.transform.position = GetMarkerPosition(cachedExplorer.transform.position);
     }
 
-    /*private void UpdateDroneMarkers()
-    {
-        if (!showDroneMarkers)
-        {
-            return;
-        }
-
-        DroneFrontierExplorer[] drones = FindObjectsByType<DroneFrontierExplorer>();
-
-        for (int i = 0; i < drones.Length && i < droneMarkers.Count; i++)
-        {
-            if (drones[i] == null || droneMarkers[i] == null)
-            {
-                continue;
-            }
-
-            droneMarkers[i].transform.position = GetMarkerPosition(drones[i].transform.position);
-        }
-    }*/
     private void UpdateDroneMarkers()
     {
         for (int i = 0; i < cachedDrones.Length && i < droneMarkers.Count; i++)
@@ -318,14 +277,7 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private Material CreateMaterial(Color color)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-
-        if (shader == null)
-        {
-            shader = Shader.Find("Unlit/Color");
-        }
-
-        Material material = new Material(shader);
+        Material material = new Material(RuntimeUnlitShader.Get());
         material.color = color;
 
         return material;
@@ -403,9 +355,7 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private void OnDestroy()
     {
-        // Only markers created by this component are owned. References can be
-        // populated by tooling or reflection, so do not destroy arbitrary objects
-        // merely because they appear in explorerMarker or droneMarkers.
+        // Serialized marker references may not be owned by this component.
         foreach (GameObject marker in ownedMarkers)
         {
             if (marker != null)
@@ -420,7 +370,6 @@ public class MapTargetMarkerController : MonoBehaviour
         cachedExplorer = null;
         cachedDrones = System.Array.Empty<DroneFrontierExplorer>();
 
-        // Markers must be destroyed before the shared runtime materials they use.
         DestroyRuntimeObject(explorerMaterial);
         DestroyRuntimeObject(droneMaterial);
         explorerMaterial = null;
