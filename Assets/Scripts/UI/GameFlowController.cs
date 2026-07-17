@@ -88,13 +88,19 @@ public class GameFlowController : MonoBehaviour
 
         pendingStartWasReplay = resultShown;
         startInProgress = true;
+
+        // Activate dependencies before setup; UI and timers still wait for completion.
+        if (gameRoot != null)
+        {
+            gameRoot.SetActive(true);
+        }
+
         bool accepted = scriptsControl != null
             && (pendingStartWasReplay
                 ? scriptsControl.TryStartNewSimulationAsync(OnSimulationStartCompleted)
                 : scriptsControl.TryStartSimulationAsync(OnSimulationStartCompleted));
 
-        // Rejections normally invoke the callback synchronously. This fallback also
-        // covers a missing ScriptsControl reference.
+        // Handle missing ScriptsControl or a rejection without a callback.
         if (!accepted && startInProgress)
         {
             OnSimulationStartCompleted(false, "Simulation startup request was rejected.");
@@ -116,18 +122,14 @@ public class GameFlowController : MonoBehaviour
         {
             Debug.LogError($"[GameFlowController] Simulation setup failed; gameplay was not started. {error}", this);
             gameRunning = false;
-            // Preserve resultShown for a failed replay so another click still takes
-            // the explicit new-game path.
+            // Keep failed replay retries on the explicit new-game path.
             resultShown = replay;
-            if (isActiveAndEnabled && gameObject.activeInHierarchy)
-            {
-                ShowStartScreen();
-            }
+            // Cancellation may invoke this synchronously during OnDisable.
+            ShowStartScreen();
             return;
         }
 
-        // Auto-start batch runners own their mission lifecycle asynchronously. Do not
-        // start a GameFlow timeout for a run that this controller did not launch.
+        // Batch runners own their lifecycle and timeout.
         if (scriptsControl.BatchAutoStartEnabled)
         {
             ShowStartScreen();
@@ -150,8 +152,7 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // CancelQueuedReset reports failure synchronously. Leave the guard set until
-        // that callback has observed the cancellation.
+        // Keep the guard set through synchronous cancellation callback.
         scriptsControl?.CancelPendingStart("GameFlowController became inactive before startup completed.");
         startInProgress = false;
         pendingStartWasReplay = false;
@@ -179,13 +180,11 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // 重要：
-        // TimeLimit判定より先に、Drone側の発見情報をGameFlowControllerへ同期する
+        // Discovery takes precedence over a timeout reported in the same frame.
         TrySyncFoundTimeFromDroneReports();
 
         float elapsed = Time.time - gameStartTime;
 
-        // まだ本当に発見していない場合だけSearchTimeLimitを見る
         if (foundTime < 0f)
         {
             if (useSearchTimeLimit && elapsed >= searchTimeLimitSeconds)
@@ -197,8 +196,6 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // ここに来た時点で遭難者は発見済み
-        // SearchTimeLimitはもう見ない
         if (useDroneReturnTimeLimit)
         {
             float elapsedAfterFound = elapsed - foundTime;
@@ -222,14 +219,11 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // まずDrone側のTargetReportから正確な発見時刻を取る
         if (!TrySyncFoundTimeFromDroneReports())
         {
-            // TargetReportがまだ取れない場合だけ現在時刻を使う
             foundTime = Time.time - gameStartTime;
         }
     }
-    //ドローン全機集合時、このメソッドを実行する
     public void NotifyAllDronesReturned()
     {
         if (!gameRunning || resultShown)
@@ -239,7 +233,6 @@ public class GameFlowController : MonoBehaviour
 
         float elapsed = Time.time - gameStartTime;
 
-        // 成功前にも念のため発見時刻を同期する
         if (foundTime < 0f)
         {
             TrySyncFoundTimeFromDroneReports();
@@ -262,12 +255,10 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // 強制的にSearchFailedにする前に、Drone側では発見済みでないか確認する
         TrySyncFoundTimeFromDroneReports();
 
         if (foundTime >= 0f)
         {
-            // 既に見つけているならSearch失敗ではなくReturn失敗
             droneReturnTime = -1f;
             EndGame(GameEndReason.DroneReturnTimeout);
             return;
@@ -288,7 +279,6 @@ public class GameFlowController : MonoBehaviour
 
         if (foundTime < 0f)
         {
-            // 本当にまだ見つけていない場合はSearch失敗
             droneReturnTime = -1f;
             EndGame(GameEndReason.SearchTimeout);
             return;
@@ -341,10 +331,7 @@ public class GameFlowController : MonoBehaviour
         TryHandleTelemetryTimeout();
     }
 
-    /// <summary>
-    /// Ends an actively owned interactive run at an external simulation timeout.
-    /// GameFlow remains authoritative for the search-versus-return timeout reason.
-    /// </summary>
+    /// <summary>Ends an owned run while preserving GameFlow's timeout classification.</summary>
     public bool TryHandleTelemetryTimeout()
     {
         if (!gameRunning || resultShown)
@@ -362,17 +349,15 @@ public class GameFlowController : MonoBehaviour
 
     private void EndGame(GameEndReason reason)
     {
-        // EndGame can be reached by UI, timeout, and drone callbacks in the same frame.
-        // The first result is authoritative; later notifications must not replace it.
+        // The first same-frame end notification is authoritative.
         if (!gameRunning || resultShown)
         {
             return;
         }
 
-        // 終了直前にもDrone側の発見情報を確認する
         bool explorerFound = TrySyncFoundTimeFromDroneReports();
 
-        // SearchTimeout扱いで来ても、実はDroneが発見済みならReturn失敗へ変える
+        // Correct a same-frame search timeout if discovery already occurred.
         if (reason == GameEndReason.SearchTimeout && explorerFound)
         {
             reason = GameEndReason.DroneReturnTimeout;
@@ -383,8 +368,7 @@ public class GameFlowController : MonoBehaviour
         endReason = reason;
         gameEndTime = Time.time - gameStartTime;
 
-        // Result smoke belongs to the result lifecycle, not to whichever drone's
-        // Update happens to observe completion first. This also covers force-end.
+        // Result smoke must not depend on which drone observes completion first.
         DroneMissionEndReporter.EnsureTargetSmokeForResult();
 
         StopSimulation(reason);
@@ -432,8 +416,7 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // Keep the stopped result world intact for result rendering. The next Start
-        // click is the explicit boundary that safely rebuilds it in this scene.
+        // Rebuild the stopped result world only on the next Start.
         ShowStartScreen();
     }
 
