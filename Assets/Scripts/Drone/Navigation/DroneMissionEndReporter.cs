@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 
 [DisallowMultipleComponent]
@@ -8,10 +9,19 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
 {
     private static bool s_ExplorerFoundNotified;
     private static bool s_AllDronesReturnedNotified;
+    private static bool s_TargetSmokeSpawned;
 
     [Header("Game Flow")]
     [SerializeField] private GameFlowController gameFlowController;
     [SerializeField] private float completionCheckInterval = 0.2f;
+
+    [Header("Target Smoke")]
+    [SerializeField] private string targetSmokeResourcePath = "Smoke/TargetSmoke";
+    [SerializeField] private float targetSmokeY = 0.05f;
+    [SerializeField] private float targetSmokeStopAfterSeconds = -999f;
+    [SerializeField] private float targetSmokeDestroyAfterStop = 999f;
+
+    private ParticleSystem targetSmokePrefab;
 
     [Header("Return Check")]
     [SerializeField] private float minimumReturnRadiusInCells = 2f;
@@ -27,6 +37,42 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
     {
         s_ExplorerFoundNotified = false;
         s_AllDronesReturnedNotified = false;
+        s_TargetSmokeSpawned = false;
+    }
+
+    public static bool EnsureTargetSmokeForResult()
+    {
+        if (s_TargetSmokeSpawned)
+        {
+            return true;
+        }
+
+        DroneMissionEndReporter reporter = FindAnyObjectByType<DroneMissionEndReporter>(
+            FindObjectsInactive.Include
+        );
+        Explorer explorer = FindAnyObjectByType<Explorer>(FindObjectsInactive.Include);
+        DroneDemoGridWorld world = reporter != null && reporter.sensor != null
+            ? reporter.sensor.World
+            : FindAnyObjectByType<DroneDemoGridWorld>(FindObjectsInactive.Include);
+
+        if (reporter == null || explorer == null || world == null)
+        {
+            return false;
+        }
+
+        if (reporter.targetSmokePrefab == null)
+        {
+            reporter.targetSmokePrefab = Resources.Load<ParticleSystem>(
+                reporter.targetSmokeResourcePath
+            );
+        }
+
+        DroneNative.DroneVec3i targetCell = world.WorldToGrid(explorer.transform.position);
+        reporter.SpawnTargetSmokeOnce(
+            new DroneTargetReport(targetCell, Time.time, -1),
+            world
+        );
+        return s_TargetSmokeSpawned;
     }
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -38,6 +84,13 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
     private void Awake()
     {
         sensor = GetComponent<DroneGridSensor>();
+
+        targetSmokePrefab = Resources.Load<ParticleSystem>(targetSmokeResourcePath);
+
+        if (targetSmokePrefab == null)
+        {
+            Debug.LogError($"Smoke Prefabが見つかりません: Resources/{targetSmokeResourcePath}.prefab", this);
+        }
     }
 
     private void OnEnable()
@@ -80,6 +133,7 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
         if (AllActiveDronesReturnedToTarget(firstReport, world))
         {
             NotifyAllDronesReturned();
+            SpawnTargetSmokeOnce(firstReport, world);
             StopAllDroneExplorers();
         }
     }
@@ -109,6 +163,52 @@ public sealed class DroneMissionEndReporter : MonoBehaviour
 
         s_AllDronesReturnedNotified = true;
         ResolveGameFlowController()?.NotifyAllDronesReturned();
+    }
+
+    private void SpawnTargetSmokeOnce(DroneTargetReport report, DroneDemoGridWorld world)
+    {
+        if (s_TargetSmokeSpawned || targetSmokePrefab == null || world == null)
+        {
+            return;
+        }
+
+        s_TargetSmokeSpawned = true;
+
+        Vector3 smokePosition = world.GridToWorld(report.Cell, targetSmokeY);
+
+        ParticleSystem smoke = Instantiate(
+            targetSmokePrefab,
+            smokePosition,
+            Quaternion.identity
+        );
+
+        // Parenting prevents interrupted replay teardown from leaking smoke objects.
+        smoke.transform.SetParent(transform, true);
+        smoke.Play();
+
+        StartCoroutine(StopAndDestroySmoke(smoke));
+    }
+
+    private IEnumerator StopAndDestroySmoke(ParticleSystem smoke)
+    {
+        if (targetSmokeStopAfterSeconds <= 0f)
+        {
+            yield break;
+        }
+
+        yield return new WaitForSeconds(targetSmokeStopAfterSeconds);
+
+        if (smoke != null)
+        {
+            smoke.Stop(true, ParticleSystemStopBehavior.StopEmitting);
+        }
+
+        yield return new WaitForSeconds(Mathf.Max(0f, targetSmokeDestroyAfterStop));
+
+        if (smoke != null)
+        {
+            Destroy(smoke.gameObject);
+        }
     }
 
     private bool TryGetEarliestTargetReportGlobally(

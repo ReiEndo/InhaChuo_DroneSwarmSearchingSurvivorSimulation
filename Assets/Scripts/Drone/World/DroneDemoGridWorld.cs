@@ -24,6 +24,7 @@ public sealed class DroneDemoGridWorld : MonoBehaviour
     public int Width => width;
     public int Height => height;
     public int Depth => depth;
+    public Terrain SurfaceTerrain => surfaceTerrain;
 
     public void Configure(
         Vector3 newGridOrigin,

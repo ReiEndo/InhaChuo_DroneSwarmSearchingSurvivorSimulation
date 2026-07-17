@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using UnityEditor.Timeline;
 using UnityEngine;
 
 public class MapTargetMarkerController : MonoBehaviour
@@ -27,15 +26,22 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private GameObject explorerMarker;
     private readonly List<GameObject> droneMarkers = new List<GameObject>();
+    private readonly HashSet<GameObject> ownedMarkers = new HashSet<GameObject>();
 
     private Material explorerMaterial;
     private Material droneMaterial;
 
     private float nextRefreshTime;
     private int markerLayer;
+    private bool markerLayerResolved;
 
     private Explorer cachedExplorer;
     private DroneFrontierExplorer[] cachedDrones = System.Array.Empty<DroneFrontierExplorer>();
+
+    private void Awake()
+    {
+        ResolveMarkerLayer();
+    }
 
     public void MapCameraMarker_Start()
     {
@@ -44,24 +50,30 @@ public class MapTargetMarkerController : MonoBehaviour
             terrain = FindAnyObjectByType<Terrain>();
         }
 
-        if (markerLayerName == "Default")
+        ResolveMarkerLayer();
+        EnsureMaterials();
+        RebindMarkerMaterials();
+        RebindMarkerLayers();
+
+        RefreshMarkers();
+        ApplyMarkerVisibility();
+    }
+
+    private void ResolveMarkerLayer()
+    {
+        if (string.IsNullOrWhiteSpace(markerLayerName) || markerLayerName == "Default")
         {
             markerLayerName = "Marker";
         }
 
         markerLayer = LayerMask.NameToLayer(markerLayerName);
+        markerLayerResolved = true;
 
         if (markerLayer < 0)
         {
             Debug.LogWarning($"{markerLayerName} レイヤーが見つかりません。Defaultを使用します。");
             markerLayer = 0;
         }
-
-        explorerMaterial = CreateMaterial(explorerColor);
-        droneMaterial = CreateMaterial(droneColor);
-
-        RefreshMarkers();
-        ApplyMarkerVisibility();
     }
 
     private void LateUpdate()
@@ -94,9 +106,7 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private void RefreshExplorerMarker()
     {
-        Explorer explorer = FindAnyObjectByType<Explorer>();
-
-        if (explorer == null)
+        if (cachedExplorer == null)
         {
             if (explorerMarker != null)
             {
@@ -118,9 +128,7 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private void RefreshDroneMarkers()
     {
-        DroneFrontierExplorer[] drones = FindObjectsByType<DroneFrontierExplorer>();
-
-        while (droneMarkers.Count < drones.Length)
+        while (droneMarkers.Count < cachedDrones.Length)
         {
             GameObject marker = CreateMarker(
                 $"DroneMapMarker_{droneMarkers.Count + 1}",
@@ -133,32 +141,12 @@ public class MapTargetMarkerController : MonoBehaviour
 
         for (int i = 0; i < droneMarkers.Count; i++)
         {
-            droneMarkers[i].SetActive(showDroneMarkers && i < drones.Length);
+            droneMarkers[i].SetActive(
+                showDroneMarkers && i < cachedDrones.Length && cachedDrones[i] != null
+            );
         }
     }
 
-    /*private void UpdateExplorerMarker()
-    {
-        if (!showExplorerMarker)
-        {
-            return;
-        }
-
-        if (explorerMarker == null)
-        {
-            return;
-        }
-
-        Explorer explorer = FindAnyObjectByType<Explorer>();
-
-        if (explorer == null)
-        {
-            explorerMarker.SetActive(false);
-            return;
-        }
-
-        explorerMarker.transform.position = GetMarkerPosition(explorer.transform.position);
-    }*/
     private void UpdateExplorerMarker()
     {
         if (cachedExplorer == null || explorerMarker == null)
@@ -169,25 +157,6 @@ public class MapTargetMarkerController : MonoBehaviour
         explorerMarker.transform.position = GetMarkerPosition(cachedExplorer.transform.position);
     }
 
-    /*private void UpdateDroneMarkers()
-    {
-        if (!showDroneMarkers)
-        {
-            return;
-        }
-
-        DroneFrontierExplorer[] drones = FindObjectsByType<DroneFrontierExplorer>();
-
-        for (int i = 0; i < drones.Length && i < droneMarkers.Count; i++)
-        {
-            if (drones[i] == null || droneMarkers[i] == null)
-            {
-                continue;
-            }
-
-            droneMarkers[i].transform.position = GetMarkerPosition(drones[i].transform.position);
-        }
-    }*/
     private void UpdateDroneMarkers()
     {
         for (int i = 0; i < cachedDrones.Length && i < droneMarkers.Count; i++)
@@ -216,6 +185,11 @@ public class MapTargetMarkerController : MonoBehaviour
 
     private GameObject CreateMarker(string markerName, Material material, float size)
     {
+        if (!markerLayerResolved)
+        {
+            ResolveMarkerLayer();
+        }
+
         GameObject marker = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         marker.name = markerName;
 
@@ -230,22 +204,80 @@ public class MapTargetMarkerController : MonoBehaviour
 
         if (collider != null)
         {
-            Destroy(collider);
+            DestroyRuntimeObject(collider);
         }
 
+        ownedMarkers.Add(marker);
         return marker;
+    }
+
+    private void EnsureMaterials()
+    {
+        if (explorerMaterial == null)
+        {
+            explorerMaterial = CreateMaterial(explorerColor);
+        }
+        else
+        {
+            explorerMaterial.color = explorerColor;
+        }
+
+        if (droneMaterial == null)
+        {
+            droneMaterial = CreateMaterial(droneColor);
+        }
+        else
+        {
+            droneMaterial.color = droneColor;
+        }
+    }
+
+    private void RebindMarkerMaterials()
+    {
+        SetMarkerMaterial(explorerMarker, explorerMaterial);
+
+        for (int i = 0; i < droneMarkers.Count; i++)
+        {
+            SetMarkerMaterial(droneMarkers[i], droneMaterial);
+        }
+    }
+
+    private void RebindMarkerLayers()
+    {
+        SetMarkerLayer(explorerMarker);
+
+        for (int i = 0; i < droneMarkers.Count; i++)
+        {
+            SetMarkerLayer(droneMarkers[i]);
+        }
+    }
+
+    private void SetMarkerLayer(GameObject marker)
+    {
+        if (marker != null)
+        {
+            marker.layer = markerLayer;
+        }
+    }
+
+    private static void SetMarkerMaterial(GameObject marker, Material material)
+    {
+        if (marker == null)
+        {
+            return;
+        }
+
+        Renderer markerRenderer = marker.GetComponent<Renderer>();
+
+        if (markerRenderer != null)
+        {
+            markerRenderer.sharedMaterial = material;
+        }
     }
 
     private Material CreateMaterial(Color color)
     {
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-
-        if (shader == null)
-        {
-            shader = Shader.Find("Unlit/Color");
-        }
-
-        Material material = new Material(shader);
+        Material material = new Material(RuntimeUnlitShader.Get());
         material.color = color;
 
         return material;
@@ -255,14 +287,16 @@ public class MapTargetMarkerController : MonoBehaviour
     {
         if (explorerMarker != null)
         {
-            explorerMarker.SetActive(showExplorerMarker);
+            explorerMarker.SetActive(showExplorerMarker && cachedExplorer != null);
         }
 
         for (int i = 0; i < droneMarkers.Count; i++)
         {
             if (droneMarkers[i] != null)
             {
-                droneMarkers[i].SetActive(showDroneMarkers);
+                droneMarkers[i].SetActive(
+                    showDroneMarkers && i < cachedDrones.Length && cachedDrones[i] != null
+                );
             }
         }
     }
@@ -302,16 +336,43 @@ public class MapTargetMarkerController : MonoBehaviour
         SetAllMarkersVisible(nextVisible);
     }
 
-    private void OnDestroy()
+    private static void DestroyRuntimeObject(Object runtimeObject)
     {
-        if (explorerMaterial != null)
+        if (runtimeObject == null)
         {
-            Destroy(explorerMaterial);
+            return;
         }
 
-        if (droneMaterial != null)
+        if (Application.isPlaying)
         {
-            Destroy(droneMaterial);
+            Destroy(runtimeObject);
         }
+        else
+        {
+            DestroyImmediate(runtimeObject);
+        }
+    }
+
+    private void OnDestroy()
+    {
+        // Serialized marker references may not be owned by this component.
+        foreach (GameObject marker in ownedMarkers)
+        {
+            if (marker != null)
+            {
+                DestroyRuntimeObject(marker);
+            }
+        }
+
+        ownedMarkers.Clear();
+        explorerMarker = null;
+        droneMarkers.Clear();
+        cachedExplorer = null;
+        cachedDrones = System.Array.Empty<DroneFrontierExplorer>();
+
+        DestroyRuntimeObject(explorerMaterial);
+        DestroyRuntimeObject(droneMaterial);
+        explorerMaterial = null;
+        droneMaterial = null;
     }
 }

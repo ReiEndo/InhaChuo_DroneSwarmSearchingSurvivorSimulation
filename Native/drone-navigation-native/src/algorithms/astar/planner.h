@@ -15,7 +15,6 @@ public:
   [[nodiscard]] PathResult Plan(const PathRequest &request) const override;
 };
 
-// Convenience wrapper for direct A* callers and tests
 PathResult PlanPath(const PathRequest &request);
 
 } // namespace drone::algorithms::astar

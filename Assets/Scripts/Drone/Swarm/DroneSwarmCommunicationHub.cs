@@ -67,8 +67,7 @@ public sealed class DroneSwarmCommunicationHub : MonoBehaviour
 
     private bool ShouldRefreshAutoFoundNodes()
     {
-        // Fast path: reuse the cached node list as long as every entry is still alive
-        // A destroyed node is detected cheaply and triggers an immediate rescan
+        // Reuse the cache until a destroyed node requires a rescan.
         for (int i = 0; i < nodes.Count; i++)
         {
             if (nodes[i] == null)

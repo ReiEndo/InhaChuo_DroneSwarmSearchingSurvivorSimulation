@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.SceneManagement;
 using TMPro;
 
 public class GameFlowController : MonoBehaviour
@@ -58,6 +57,8 @@ public class GameFlowController : MonoBehaviour
 
     private bool gameRunning;
     private bool resultShown;
+    private bool startInProgress;
+    private bool pendingStartWasReplay;
 
     private GameEndReason endReason = GameEndReason.None;
 
@@ -75,16 +76,86 @@ public class GameFlowController : MonoBehaviour
 
     public void OnClickStart()
     {
-        if(startSettingsController != null)
+        if (gameRunning || startInProgress)
+        {
+            return;
+        }
+
+        if (startSettingsController != null)
         {
             startSettingsController.ApplySettings();
         }
-        StartGame();
 
-        if (scriptsControl != null)
+        pendingStartWasReplay = resultShown;
+        startInProgress = true;
+
+        // Activate dependencies before setup; UI and timers still wait for completion.
+        if (gameRoot != null)
         {
-            scriptsControl.StartSimulation();
+            gameRoot.SetActive(true);
         }
+
+        bool accepted = scriptsControl != null
+            && (pendingStartWasReplay
+                ? scriptsControl.TryStartNewSimulationAsync(OnSimulationStartCompleted)
+                : scriptsControl.TryStartSimulationAsync(OnSimulationStartCompleted));
+
+        // Handle missing ScriptsControl or a rejection without a callback.
+        if (!accepted && startInProgress)
+        {
+            OnSimulationStartCompleted(false, "Simulation startup request was rejected.");
+        }
+    }
+
+    private void OnSimulationStartCompleted(bool succeeded, string error)
+    {
+        if (!startInProgress)
+        {
+            return;
+        }
+
+        bool replay = pendingStartWasReplay;
+        startInProgress = false;
+        pendingStartWasReplay = false;
+
+        if (!succeeded)
+        {
+            Debug.LogError($"[GameFlowController] Simulation setup failed; gameplay was not started. {error}", this);
+            gameRunning = false;
+            // Keep failed replay retries on the explicit new-game path.
+            resultShown = replay;
+            // Cancellation may invoke this synchronously during OnDisable.
+            ShowStartScreen();
+            return;
+        }
+
+        // Batch runners own their lifecycle and timeout.
+        if (scriptsControl.BatchAutoStartEnabled)
+        {
+            ShowStartScreen();
+            return;
+        }
+
+        if (!isActiveAndEnabled || !gameObject.activeInHierarchy)
+        {
+            scriptsControl.CancelPendingStart("GameFlowController became inactive after startup.");
+            return;
+        }
+
+        StartGame();
+    }
+
+    private void OnDisable()
+    {
+        if (!startInProgress)
+        {
+            return;
+        }
+
+        // Keep the guard set through synchronous cancellation callback.
+        scriptsControl?.CancelPendingStart("GameFlowController became inactive before startup completed.");
+        startInProgress = false;
+        pendingStartWasReplay = false;
     }
 
     private void StartGame()
@@ -109,13 +180,11 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // 重要：
-        // TimeLimit判定より先に、Drone側の発見情報をGameFlowControllerへ同期する
+        // Discovery takes precedence over a timeout reported in the same frame.
         TrySyncFoundTimeFromDroneReports();
 
         float elapsed = Time.time - gameStartTime;
 
-        // まだ本当に発見していない場合だけSearchTimeLimitを見る
         if (foundTime < 0f)
         {
             if (useSearchTimeLimit && elapsed >= searchTimeLimitSeconds)
@@ -127,8 +196,6 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // ここに来た時点で遭難者は発見済み
-        // SearchTimeLimitはもう見ない
         if (useDroneReturnTimeLimit)
         {
             float elapsedAfterFound = elapsed - foundTime;
@@ -152,14 +219,11 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // まずDrone側のTargetReportから正確な発見時刻を取る
         if (!TrySyncFoundTimeFromDroneReports())
         {
-            // TargetReportがまだ取れない場合だけ現在時刻を使う
             foundTime = Time.time - gameStartTime;
         }
     }
-    //ドローン全機集合時、このメソッドを実行する
     public void NotifyAllDronesReturned()
     {
         if (!gameRunning || resultShown)
@@ -169,7 +233,6 @@ public class GameFlowController : MonoBehaviour
 
         float elapsed = Time.time - gameStartTime;
 
-        // 成功前にも念のため発見時刻を同期する
         if (foundTime < 0f)
         {
             TrySyncFoundTimeFromDroneReports();
@@ -192,12 +255,10 @@ public class GameFlowController : MonoBehaviour
             return;
         }
 
-        // 強制的にSearchFailedにする前に、Drone側では発見済みでないか確認する
         TrySyncFoundTimeFromDroneReports();
 
         if (foundTime >= 0f)
         {
-            // 既に見つけているならSearch失敗ではなくReturn失敗
             droneReturnTime = -1f;
             EndGame(GameEndReason.DroneReturnTimeout);
             return;
@@ -218,7 +279,6 @@ public class GameFlowController : MonoBehaviour
 
         if (foundTime < 0f)
         {
-            // 本当にまだ見つけていない場合はSearch失敗
             droneReturnTime = -1f;
             EndGame(GameEndReason.SearchTimeout);
             return;
@@ -268,33 +328,36 @@ public class GameFlowController : MonoBehaviour
 
     public void ForceEnd()
     {
+        TryHandleTelemetryTimeout();
+    }
+
+    /// <summary>Ends an owned run while preserving GameFlow's timeout classification.</summary>
+    public bool TryHandleTelemetryTimeout()
+    {
+        if (!gameRunning || resultShown)
+        {
+            return false;
+        }
+
+        TrySyncFoundTimeFromDroneReports();
+        droneReturnTime = -1f;
+        EndGame(foundTime < 0f
+            ? GameEndReason.SearchTimeout
+            : GameEndReason.DroneReturnTimeout);
+        return true;
+    }
+
+    private void EndGame(GameEndReason reason)
+    {
+        // The first same-frame end notification is authoritative.
         if (!gameRunning || resultShown)
         {
             return;
         }
 
-        TrySyncFoundTimeFromDroneReports();
-
-        if (foundTime < 0f)
-        {
-            // まだ発見していないなら、探索失敗扱い
-            droneReturnTime = -1f;
-            EndGame(GameEndReason.SearchTimeout);
-        }
-        else
-        {
-            // 発見済みなら、回収失敗扱い
-            droneReturnTime = -1f;
-            EndGame(GameEndReason.DroneReturnTimeout);
-        }
-    }
-
-    private void EndGame(GameEndReason reason)
-    {
-        // 終了直前にもDrone側の発見情報を確認する
         bool explorerFound = TrySyncFoundTimeFromDroneReports();
 
-        // SearchTimeout扱いで来ても、実はDroneが発見済みならReturn失敗へ変える
+        // Correct a same-frame search timeout if discovery already occurred.
         if (reason == GameEndReason.SearchTimeout && explorerFound)
         {
             reason = GameEndReason.DroneReturnTimeout;
@@ -305,13 +368,56 @@ public class GameFlowController : MonoBehaviour
         endReason = reason;
         gameEndTime = Time.time - gameStartTime;
 
+        // Result smoke must not depend on which drone observes completion first.
+        DroneMissionEndReporter.EnsureTargetSmokeForResult();
+
+        StopSimulation(reason);
         ShowResultScreen();
+    }
+
+    private void StopSimulation(GameEndReason reason)
+    {
+        DroneSwarmDemoBootstrap bootstrap = scriptsControl != null
+            ? scriptsControl.droneSwarmDemoBootstrap
+            : null;
+
+        if (bootstrap == null)
+        {
+            bootstrap = FindAnyObjectByType<DroneSwarmDemoBootstrap>();
+        }
+
+        if (bootstrap != null)
+        {
+            bootstrap.StopSimulation(GetTelemetryEndReason(reason), reason == GameEndReason.Success);
+        }
+    }
+
+    private static string GetTelemetryEndReason(GameEndReason reason)
+    {
+        switch (reason)
+        {
+            case GameEndReason.Success:
+                return "mission_complete";
+            case GameEndReason.SearchTimeout:
+                return "search_timeout";
+            case GameEndReason.DroneReturnTimeout:
+                return "drone_return_timeout";
+            case GameEndReason.Forced:
+                return "forced";
+            default:
+                return "ended";
+        }
     }
 
     public void OnClickBackToTitle()
     {
-        // 完全に初期状態へ戻したいならScene再読み込みが一番安全
-        SceneManager.LoadScene(SceneManager.GetActiveScene().name);
+        if (gameRunning)
+        {
+            return;
+        }
+
+        // Rebuild the stopped result world only on the next Start.
+        ShowStartScreen();
     }
 
     private void ShowStartScreen()

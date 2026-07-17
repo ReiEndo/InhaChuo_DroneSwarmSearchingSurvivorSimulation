@@ -26,11 +26,6 @@ public class ExplorerCameraView : MonoBehaviour
     private RenderTexture renderTexture;
     private Vector2 lastImageSize;
 
-    /*private void Start() UiScriptsControlで管理
-    {
-        Setup();
-    }*/
-
     private void LateUpdate()
     {
         UpdateUvRectIfNeeded();
@@ -130,8 +125,6 @@ public class ExplorerCameraView : MonoBehaviour
 
         if (panelAspect > textureAspect)
         {
-            // Panelの方が横長
-            // 上下を切る
             float visibleHeight = textureAspect / panelAspect;
             float y = (1f - visibleHeight) * 0.5f;
 
@@ -144,8 +137,6 @@ public class ExplorerCameraView : MonoBehaviour
         }
         else
         {
-            // Panelの方が縦長
-            // 左右を切る
             float visibleWidth = panelAspect / textureAspect;
             float x = (1f - visibleWidth) * 0.5f;
 

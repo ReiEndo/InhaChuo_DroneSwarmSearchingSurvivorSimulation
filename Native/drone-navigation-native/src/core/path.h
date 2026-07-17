@@ -43,8 +43,7 @@ struct PathRequest {
   Vec3i start;
   Vec3i goal;
 
-  // Cells default to unknown. Only cells marked free or target are traversable.
-  // Unknown and blocked cells are not treated as safe for route planning.
+  // Unlisted cells are unknown; only free or target cells are traversable.
   std::vector<CellStateUpdate> discovered_cells;
 };
 
@@ -89,12 +88,7 @@ enum DroneCellState : std::int32_t {
   DRONE_CELL_TARGET = 3,
 };
 
-/**
- * Unity entry point.
- *
- * Cells not listed in known_cells default to DRONE_CELL_UNKNOWN and are not
- * traversable. Only DRONE_CELL_FREE and DRONE_CELL_TARGET are safe to traverse.
- */
+// Unity entry point; unlisted cells are unknown and not traversable.
 std::int32_t DronePlanKnownPath(std::int32_t planner_type, std::int32_t width,
                                 std::int32_t height, std::int32_t depth,
                                 DroneVec3i start, DroneVec3i goal,

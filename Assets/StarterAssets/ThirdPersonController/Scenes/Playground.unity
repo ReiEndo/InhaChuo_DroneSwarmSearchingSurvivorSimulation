@@ -24270,7 +24270,7 @@ MonoBehaviour:
   staminaRecoveryPerSecond: 7
   recoveryDecay: 0.2
   restartThreshold: 50
-  takingRestClip: {fileID: 0}
+  takingRestClip: {fileID: 3897531120742010535, guid: 877cdc97b6d23784089bb95adc3b2202, type: 3}
   takingRestClipName: TakingRest
   stuckCheckInterval: 3
   stuckDistanceThreshold: 1

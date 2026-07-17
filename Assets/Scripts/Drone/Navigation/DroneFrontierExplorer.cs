@@ -495,9 +495,7 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         CaptureHomeCellIfNeeded();
 
         var startCell = world.WorldToGrid(transform.position);
-        // Target sensing can happen earlier in the same frame as this replan. Use a
-        // slightly newer timestamp so the drone's current cell is traversable when
-        // plotting the route home from the found person.
+        // Make the current cell newer than same-frame target sensing for the return route.
         float planningTimestamp = Mathf.Max(Time.time, 0.0001f) + 0.0001f;
         agentState.ObserveCell(startCell, DroneCellState.Free, planningTimestamp);
         if (hasHomeCell)
@@ -556,7 +554,14 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
         if (targetKnowledgeMode == TargetKnowledgeMode.MovingToTargetAnchor && hasTargetAnchorCell)
         {
             goalCell = targetAnchorCell;
-            return TryPlanPath(startCell, goalCell, snapshot);
+            if (TryPlanPath(startCell, goalCell, snapshot))
+            {
+                return true;
+            }
+
+            // Keep retrying while sensing reconnects a temporarily disconnected local map.
+            RequestReplan();
+            return false;
         }
 
         if (targetKnowledgeMode == TargetKnowledgeMode.ReturningToTarget && hasTargetAnchorCell)
@@ -567,7 +572,8 @@ public sealed class DroneFrontierExplorer : MonoBehaviour
                 return true;
             }
 
-            targetKnowledgeMode = TargetKnowledgeMode.SearchingForDrones;
+            RequestReplan();
+            return false;
         }
 
         bool searchingForDrones = targetKnowledgeMode == TargetKnowledgeMode.SearchingForDrones;

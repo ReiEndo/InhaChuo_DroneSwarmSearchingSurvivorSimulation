@@ -37,7 +37,7 @@ public class DroneCameraUiController : MonoBehaviour
     private DisplayMode displayMode = DisplayMode.All;
     private int selectedDroneIndex = 0;
 
-    public void DroneCameraUI_Start() //UiScriptsControlで管理
+    public void DroneCameraUI_Start()
     {
         if (refreshOnStart)
         {
@@ -90,10 +90,8 @@ public class DroneCameraUiController : MonoBehaviour
             feeds.Add(feed);
         }
 
-        // Drone 01, Drone 02, Drone 03... の順に並べ替える
         feeds.Sort(CompareDroneFeeds);
 
-        // 最初は必ず Drone 01 から始める
         selectedDroneIndex = 0;
 
         RebuildCurrentView();

@@ -148,7 +148,6 @@ public class SimpleTerrainMapCamera : MonoBehaviour
             center.z
         );
 
-        // 真上から真下を見る
         mapCamera.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
 
         mapCamera.orthographic = true;

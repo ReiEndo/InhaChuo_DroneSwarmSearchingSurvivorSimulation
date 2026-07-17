@@ -75,7 +75,6 @@ public sealed class DroneLocalAvoidanceMotor : MonoBehaviour
             velocity = velocity.normalized * maxSpeed;
         }
 
-        /*地面にめり込むため修正rei*/
         velocity.y = preferredVelocity.y;
 
         transform.position += velocity * Time.deltaTime;
