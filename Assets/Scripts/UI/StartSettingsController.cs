@@ -10,6 +10,11 @@ public class StartSettingsController : MonoBehaviour
     private const NumberStyles FloatNumberStyles = NumberStyles.Float;
     private const string FloatFormat = "0.###";
 
+    private CanvasScaler settingsCanvasScaler;
+    private CanvasScaler.ScreenMatchMode originalScreenMatchMode;
+    private float originalMatchWidthOrHeight;
+    private bool settingsCanvasScaleOverridden;
+
     [Header("Panel")]
     [SerializeField] private GameObject settingsPanel;
 
@@ -71,6 +76,8 @@ public class StartSettingsController : MonoBehaviour
 
     public void StartSettings_Start()
     {
+        RestoreCanvasScaleMode();
+
         if (settingsPanel != null)
         {
             settingsPanel.SetActive(false);
@@ -82,11 +89,14 @@ public class StartSettingsController : MonoBehaviour
     public void OpenSettings()
     {
         LoadCurrentValuesToUI();
+        UseCanvasExpandScaleMode();
 
         if (settingsPanel != null)
         {
             settingsPanel.SetActive(true);
         }
+
+        Canvas.ForceUpdateCanvases();
     }
 
     public void CloseSettings()
@@ -97,11 +107,61 @@ public class StartSettingsController : MonoBehaviour
         {
             settingsPanel.SetActive(false);
         }
+
+        RestoreCanvasScaleMode();
+    }
+
+    private void OnDisable()
+    {
+        RestoreCanvasScaleMode();
+    }
+
+    private void UseCanvasExpandScaleMode()
+    {
+        if (settingsCanvasScaleOverridden || settingsPanel == null)
+        {
+            return;
+        }
+
+        Canvas settingsCanvas = settingsPanel.GetComponentInParent<Canvas>();
+        settingsCanvasScaler = settingsCanvas != null
+            ? settingsCanvas.GetComponent<CanvasScaler>()
+            : null;
+
+        if (settingsCanvasScaler == null
+            || settingsCanvasScaler.uiScaleMode != CanvasScaler.ScaleMode.ScaleWithScreenSize)
+        {
+            settingsCanvasScaler = null;
+            return;
+        }
+
+        originalScreenMatchMode = settingsCanvasScaler.screenMatchMode;
+        originalMatchWidthOrHeight = settingsCanvasScaler.matchWidthOrHeight;
+        settingsCanvasScaleOverridden = true;
+
+        // Expand keeps the reference layout visible at narrower aspect ratios.
+        settingsCanvasScaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
+    }
+
+    private void RestoreCanvasScaleMode()
+    {
+        if (!settingsCanvasScaleOverridden)
+        {
+            return;
+        }
+
+        if (settingsCanvasScaler != null)
+        {
+            settingsCanvasScaler.screenMatchMode = originalScreenMatchMode;
+            settingsCanvasScaler.matchWidthOrHeight = originalMatchWidthOrHeight;
+        }
+
+        settingsCanvasScaleOverridden = false;
+        settingsCanvasScaler = null;
     }
 
     public void ApplySettings()
     {
-        // Explorer target distances affect the minimum usable terrain size.
         ApplyExplorerSettings();
         ApplyTerrainSettings();
         ApplyForestSettings();
