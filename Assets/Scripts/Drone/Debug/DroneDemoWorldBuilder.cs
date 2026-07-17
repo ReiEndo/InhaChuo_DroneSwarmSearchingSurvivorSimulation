@@ -16,10 +16,7 @@ public sealed class DroneDemoWorldBuilder
         Transform targetTransform = FindTargetTransform();
         Terrain terrain = FindTerrainForTarget(targetTransform);
 
-        // Do not expand the demo grid to the full terrain size. Large terrains can create
-        // hundreds of thousands of cells, making frontier search/debug rendering stall Play Mode.
-        // Instead, keep the configured playable grid and place it on the active terrain around
-        // PlayerArmature when available.
+        // Keep the configured grid size to avoid stalling on large terrains.
         width = Mathf.Max(4, width);
         depth = Mathf.Max(4, depth);
         Vector3 gridOrigin = CalculateGridOrigin(terrain, targetTransform, width, depth, cellSize);

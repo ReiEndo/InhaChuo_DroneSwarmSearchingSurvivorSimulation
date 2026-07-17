@@ -1,10 +1,6 @@
 using TMPro;
 using UnityEngine;
 
-/*Time終了の仕方
- elapsedTimeUI.PauseTimer();　を任意の場所で実行
- */
-
 public class ElapsedTimeUI : MonoBehaviour
 {
     [Header("References")]
