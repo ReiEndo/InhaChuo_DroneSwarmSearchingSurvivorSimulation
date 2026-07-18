@@ -8,6 +8,7 @@ public sealed class DroneMissionEndReporterSmokeTests
     private GameObject worldObject;
     private GameObject reporterObject;
     private GameObject explorerObject;
+    private GameObject gameFlowObject;
 
     [TearDown]
     public void TearDown()
@@ -15,6 +16,7 @@ public sealed class DroneMissionEndReporterSmokeTests
         Type reporterType = Type.GetType("DroneMissionEndReporter, Assembly-CSharp");
         reporterType?.GetMethod("ResetMissionState", BindingFlags.Public | BindingFlags.Static)
             ?.Invoke(null, null);
+        UnityEngine.Object.DestroyImmediate(gameFlowObject);
         UnityEngine.Object.DestroyImmediate(explorerObject);
         UnityEngine.Object.DestroyImmediate(reporterObject);
         UnityEngine.Object.DestroyImmediate(worldObject);
@@ -73,6 +75,46 @@ public sealed class DroneMissionEndReporterSmokeTests
         Assert.That(
             reporterObject.GetComponentsInChildren<ParticleSystem>(true),
             Has.Length.GreaterThan(0)
+        );
+    }
+
+    [Test]
+    public void FailedResultDoesNotSpawnTargetSmoke()
+    {
+        Type worldType = RequireType("DroneDemoGridWorld, Assembly-CSharp");
+        worldObject = new GameObject("failed-result-smoke-world-test");
+        Component world = worldObject.AddComponent(worldType);
+        worldType.GetMethod("Configure").Invoke(
+            world,
+            new object[] { Vector3.zero, 1f, 4, 1, 4, (LayerMask)0, (LayerMask)0 }
+        );
+
+        Type reporterType = RequireType("DroneMissionEndReporter, Assembly-CSharp");
+        reporterType.GetMethod("ResetMissionState", BindingFlags.Public | BindingFlags.Static)
+            .Invoke(null, null);
+        reporterObject = new GameObject("failed-result-smoke-reporter-test");
+        Component reporter = reporterObject.AddComponent(reporterType);
+        Component sensor = reporterObject.GetComponent(
+            RequireType("DroneGridSensor, Assembly-CSharp")
+        );
+        sensor.GetType().GetMethod("Configure").Invoke(sensor, new object[] { world, 1 });
+
+        explorerObject = new GameObject("failed-result-smoke-explorer-test");
+        explorerObject.transform.position = new Vector3(1f, 0f, 1f);
+        explorerObject.AddComponent(RequireType("Explorer, Assembly-CSharp"));
+
+        Type gameFlowType = RequireType("GameFlowController, Assembly-CSharp");
+        gameFlowObject = new GameObject("failed-result-smoke-game-flow-test");
+        Component gameFlow = gameFlowObject.AddComponent(gameFlowType);
+        gameFlowType.GetField("gameRunning", BindingFlags.Instance | BindingFlags.NonPublic)
+            .SetValue(gameFlow, true);
+
+        gameFlowType.GetMethod("ForceEndSearchFailed", BindingFlags.Instance | BindingFlags.Public)
+            .Invoke(gameFlow, null);
+
+        Assert.That(
+            reporterObject.GetComponentsInChildren<ParticleSystem>(true),
+            Is.Empty
         );
     }
 
