@@ -27,6 +27,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
     [Header("Swarm")]
     [SerializeField] private GameObject droneModelPrefab;
+    [SerializeField] private RuntimeAnimatorController droneAnimationController;
     [SerializeField] private int droneCount = 5;
     [SerializeField] private int sensorRadius = 2;
     [SerializeField] private float communicationRadius = 3.25f;
@@ -964,7 +965,11 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 
     private void BuildSwarm()
     {
-        var result = new DroneDemoSwarmSpawner(RegisterSpawned).Build(
+        var spawner = new DroneDemoSwarmSpawner(RegisterSpawned)
+        {
+            DroneAnimationController = droneAnimationController,
+        };
+        var result = spawner.Build(
             world,
             width,
             depth,

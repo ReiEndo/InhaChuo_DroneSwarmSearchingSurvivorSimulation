@@ -14,10 +14,10 @@ public sealed class DroneModelAnimationPlayer : MonoBehaviour
     private PlayableGraph graph;
     private Animator animator;
 
-    public void Configure(GameObject sourcePrefab)
+    public void Configure(GameObject sourcePrefab, RuntimeAnimatorController animationController = null)
     {
         clips.Clear();
-        CollectPlayableClips(sourcePrefab, clips);
+        CollectPlayableClips(sourcePrefab, animationController, clips);
         if (isActiveAndEnabled)
         {
             Play();
@@ -58,7 +58,10 @@ public sealed class DroneModelAnimationPlayer : MonoBehaviour
         graph = PlayableGraph.Create($"{name} Drone Animation");
         graph.SetTimeUpdateMode(DirectorUpdateMode.GameTime);
 
-        var mixer = AnimationMixerPlayable.Create(graph, clips.Count);
+        // These clips animate separate propeller transforms, so they must be layered.
+        // A regular AnimationMixerPlayable blends them as competing poses and dilutes
+        // each propeller's rotation when the available clip set differs in a build.
+        var mixer = AnimationLayerMixerPlayable.Create(graph, clips.Count);
         for (int i = 0; i < clips.Count; i++)
         {
             AnimationClip clip = clips[i];
@@ -117,9 +120,21 @@ public sealed class DroneModelAnimationPlayer : MonoBehaviour
         playables.Clear();
     }
 
-    private static void CollectPlayableClips(GameObject sourcePrefab, List<AnimationClip> results)
+    private static void CollectPlayableClips(GameObject sourcePrefab, RuntimeAnimatorController animationController, List<AnimationClip> results)
     {
         var seen = new HashSet<AnimationClip>();
+
+        if (animationController != null)
+        {
+            foreach (AnimationClip clip in animationController.animationClips)
+            {
+                AddClipIfAllowed(clip, results, seen);
+            }
+
+            // Keep Editor and player builds deterministic. Editor-only asset discovery
+            // sees every FBX take, while a build can only see referenced controller clips.
+            return;
+        }
 
 #if UNITY_EDITOR
         if (sourcePrefab != null)

@@ -8,6 +8,8 @@ public sealed class DroneDemoSwarmSpawner
 
     private readonly Action<GameObject> registerSpawned;
 
+    public RuntimeAnimatorController DroneAnimationController { get; set; }
+
     public DroneDemoSwarmSpawner(Action<GameObject> registerSpawned)
     {
         this.registerSpawned = registerSpawned;
@@ -371,7 +373,7 @@ public sealed class DroneDemoSwarmSpawner
         {
             visual = UnityEngine.Object.Instantiate(droneModelPrefab);
             visual.name = "Drone Model";
-            visual.AddComponent<DroneModelAnimationPlayer>().Configure(droneModelPrefab);
+            visual.AddComponent<DroneModelAnimationPlayer>().Configure(droneModelPrefab, DroneAnimationController);
         }
         else
         {
