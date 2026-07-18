@@ -368,8 +368,11 @@ public class GameFlowController : MonoBehaviour
         endReason = reason;
         gameEndTime = Time.time - gameStartTime;
 
-        // Result smoke must not depend on which drone observes completion first.
-        DroneMissionEndReporter.EnsureTargetSmokeForResult();
+        // Successful result smoke must not depend on which drone observes completion first.
+        if (reason == GameEndReason.Success)
+        {
+            DroneMissionEndReporter.EnsureTargetSmokeForResult();
+        }
 
         StopSimulation(reason);
         ShowResultScreen();
