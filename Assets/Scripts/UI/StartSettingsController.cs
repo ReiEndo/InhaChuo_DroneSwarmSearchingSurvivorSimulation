@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Globalization;
 using Newtonsoft.Json.Bson;
 using TMPro;
@@ -14,6 +15,10 @@ public class StartSettingsController : MonoBehaviour
     private CanvasScaler.ScreenMatchMode originalScreenMatchMode;
     private float originalMatchWidthOrHeight;
     private bool settingsCanvasScaleOverridden;
+    private bool initialValuesCaptured;
+    private readonly Dictionary<TMP_InputField, string> initialInputValues = new Dictionary<TMP_InputField, string>();
+    private readonly Dictionary<Toggle, bool> initialToggleValues = new Dictionary<Toggle, bool>();
+    private readonly Dictionary<Slider, float> initialSliderValues = new Dictionary<Slider, float>();
 
     [Header("Panel")]
     [SerializeField] private GameObject settingsPanel;
@@ -84,11 +89,13 @@ public class StartSettingsController : MonoBehaviour
         }
 
         LoadCurrentValuesToUI();
+        CaptureInitialValues();
     }
 
     public void OpenSettings()
     {
         LoadCurrentValuesToUI();
+        CaptureInitialValues();
         UseCanvasExpandScaleMode();
 
         if (settingsPanel != null)
@@ -167,6 +174,113 @@ public class StartSettingsController : MonoBehaviour
         ApplyForestSettings();
         ApplyDroneSettings();
         ApplyGameFlowSettings();
+    }
+
+    public void ResetSettingsToDefaults()
+    {
+        if (!initialValuesCaptured)
+        {
+            LoadCurrentValuesToUI();
+            CaptureInitialValues();
+        }
+
+        foreach (KeyValuePair<TMP_InputField, string> entry in initialInputValues)
+        {
+            if (entry.Key != null)
+            {
+                entry.Key.SetTextWithoutNotify(entry.Value);
+            }
+        }
+
+        foreach (KeyValuePair<Toggle, bool> entry in initialToggleValues)
+        {
+            if (entry.Key != null)
+            {
+                entry.Key.SetIsOnWithoutNotify(entry.Value);
+            }
+        }
+
+        foreach (KeyValuePair<Slider, float> entry in initialSliderValues)
+        {
+            if (entry.Key != null)
+            {
+                entry.Key.SetValueWithoutNotify(entry.Value);
+            }
+        }
+
+        if (treePercentSlider != null)
+        {
+            UpdateTreePercentText(treePercentSlider.value);
+        }
+    }
+
+    private void CaptureInitialValues()
+    {
+        if (initialValuesCaptured)
+        {
+            return;
+        }
+
+        CaptureInput(terrainWidthInput);
+        CaptureInput(terrainScaleInput);
+        CaptureInput(terrainHeightInput);
+        CaptureInput(CountPer100mmInput);
+        CaptureInput(minHeightInput);
+        CaptureInput(maxHeightInput);
+        CaptureInput(maxSlopeInput);
+        CaptureInput(treeScaleMinInput);
+        CaptureInput(treeScaleMaxInput);
+        CaptureInput(minTreeDistanceInput);
+        CaptureInput(maxSpawnAttemptInput);
+        CaptureInput(droneGridWidthInput);
+        CaptureInput(droneGridDepthInput);
+        CaptureInput(droneCellSizeInput);
+        CaptureInput(droneCountInput);
+        CaptureInput(droneSensorRadiusInput);
+        CaptureInput(droneCommunicationRadiusInput);
+        CaptureInput(droneSpeedInput);
+        CaptureInput(searchTimeLimitInput);
+        CaptureInput(droneReturnTimeLimitInput);
+        CaptureInput(explorerScanRadiusInput);
+        CaptureInput(explorerMinTargetDistanceInput);
+        CaptureInput(explorerMoveSpeedInput);
+        CaptureInput(explorerStaminaInput);
+        CaptureInput(explorerStaminaDecreaseInput);
+        CaptureInput(explorerStaminaRecoveryInput);
+        CaptureInput(explorerRestartThresholdInput);
+        CaptureInput(explorerMaxWalkableSlopeInput);
+        CaptureInput(explorerRecoveryDecayInput);
+
+        CaptureToggle(autoDroneGridFromTerrainToggle);
+        CaptureToggle(useSearchTimeLimitToggle);
+        CaptureToggle(useDroneReturnTimeLimitToggle);
+        CaptureSlider(treePercentSlider);
+
+        initialValuesCaptured = true;
+    }
+
+    private void CaptureInput(TMP_InputField input)
+    {
+        if (input != null)
+        {
+            initialInputValues[input] = input.text;
+        }
+    }
+
+    private void CaptureToggle(Toggle toggle)
+    {
+        if (toggle != null)
+        {
+            initialToggleValues[toggle] = toggle.isOn;
+        }
+    }
+
+    private void CaptureSlider(Slider slider)
+    {
+        if (slider != null)
+        {
+            initialSliderValues[slider] = slider.value;
+        }
     }
 
     private void LoadCurrentValuesToUI()
