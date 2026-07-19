@@ -433,7 +433,7 @@ public class StartSettingsController : MonoBehaviour
             droneCountInput,
             droneSwarmDemoBootstrap.DroneCount,
             1,
-            12
+            DroneSwarmDemoBootstrap.MaximumDroneCount
         );
 
         float communicationRadius = GetFloat(

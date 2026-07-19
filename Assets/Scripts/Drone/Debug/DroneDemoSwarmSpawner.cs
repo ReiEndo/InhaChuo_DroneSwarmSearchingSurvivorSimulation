@@ -29,7 +29,7 @@ public sealed class DroneDemoSwarmSpawner
     {
         var explorers = new List<DroneFrontierExplorer>();
         var communicationNodes = new List<DroneCommunicationNode>();
-        int expectedDroneCount = Mathf.Clamp(droneCount, 1, 12);
+        int expectedDroneCount = Mathf.Clamp(droneCount, 1, DroneSwarmDemoBootstrap.MaximumDroneCount);
         var commandResult = BuildCommand(world, width, depth, expectedDroneCount, communicationRadius, plannerType, nonSensedLayer, communicationNodes);
         BuildDrones(world, width, depth, droneCount, droneModelPrefab, sensorRadius, communicationRadius, plannerType, nonSensedLayer, targetSensedHandler, explorers, communicationNodes);
         return new DroneDemoSwarmSpawnResult(explorers, communicationNodes, commandResult.CommandState, commandResult.CommandRoutePlanner);
@@ -66,7 +66,7 @@ public sealed class DroneDemoSwarmSpawner
 
     private void BuildDrones(DroneDemoGridWorld world, int width, int depth, int droneCount, GameObject droneModelPrefab, int sensorRadius, float communicationRadius, DroneNative.PlannerType plannerType, int nonSensedLayer, Action<DroneGridSensor, DroneNative.DroneVec3i> targetSensedHandler, List<DroneFrontierExplorer> explorers, List<DroneCommunicationNode> communicationNodes)
     {
-        int count = Mathf.Clamp(droneCount, 1, 12);
+        int count = Mathf.Clamp(droneCount, 1, DroneSwarmDemoBootstrap.MaximumDroneCount);
         var starts = CreateRandomMarginStarts(world, width, depth, count);
         for (int i = 0; i < count; i++)
         {

@@ -109,7 +109,7 @@ public sealed class DroneMissionTimedBatchRunner : MonoBehaviour
         targetValidMissions = Mathf.Max(1, targetValidMissions);
         maxWallClockHours = Mathf.Max(0f, maxWallClockHours);
 
-        droneCount = Mathf.Clamp(droneCount, 1, 12);
+        droneCount = Mathf.Clamp(droneCount, 1, DroneSwarmDemoBootstrap.MaximumDroneCount);
         sensorRadius = Mathf.Clamp(sensorRadius, 1, 8);
         communicationRadius = Mathf.Max(0f, communicationRadius);
         droneSpeed = Mathf.Max(0f, droneSpeed);

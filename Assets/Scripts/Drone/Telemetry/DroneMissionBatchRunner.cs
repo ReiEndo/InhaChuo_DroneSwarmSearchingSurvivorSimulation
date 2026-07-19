@@ -623,7 +623,7 @@ public sealed class DroneMissionBatchRunner : MonoBehaviour
 
     private void ClampExperimentParameters()
     {
-        droneCount = Mathf.Clamp(droneCount, 1, 12);
+        droneCount = Mathf.Clamp(droneCount, 1, DroneSwarmDemoBootstrap.MaximumDroneCount);
         sensorRadius = Mathf.Clamp(sensorRadius, 1, 8);
         communicationRadius = Mathf.Max(0f, communicationRadius);
         droneSpeed = Mathf.Max(0f, droneSpeed);

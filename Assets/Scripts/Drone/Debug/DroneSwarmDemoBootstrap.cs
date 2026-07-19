@@ -11,6 +11,8 @@ using System.Runtime.InteropServices;
 
 public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
 {
+    public const int MaximumDroneCount = 36;
+
     private const int c_ObstacleLayer = 7;
     private const int c_TargetLayer = 4;
     private const int c_NonSensedLayer = 2;
@@ -155,7 +157,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         float newTelemetryTimeoutSeconds = 0f,
         bool enableTelemetry = true)
     {
-        droneCount = Mathf.Clamp(newDroneCount, 1, 12);
+        droneCount = Mathf.Clamp(newDroneCount, 1, MaximumDroneCount);
         sensorRadius = Mathf.Clamp(newSensorRadius, 1, 8);
         communicationRadius = Mathf.Max(0f, newCommunicationRadius);
         droneSpeed = Mathf.Max(0f, newDroneSpeed);
@@ -898,7 +900,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         width = Mathf.Max(4, width);
         depth = Mathf.Max(4, depth);
         cellSize = Mathf.Max(0.25f, cellSize);
-        droneCount = Mathf.Clamp(droneCount, 1, 12);
+        droneCount = Mathf.Clamp(droneCount, 1, MaximumDroneCount);
         sensorRadius = Mathf.Clamp(sensorRadius, 1, 8);
         communicationRadius = Mathf.Max(0f, communicationRadius);
         droneSpeed = Mathf.Max(0f, droneSpeed);
@@ -2000,7 +2002,7 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
     float newCellSize
     )
     {
-        droneCount = Mathf.Clamp(newDroneCount, 1, 12);
+        droneCount = Mathf.Clamp(newDroneCount, 1, MaximumDroneCount);
         droneSpeed = Mathf.Max(0f, newDroneSpeed);
         communicationRadius = Mathf.Max(0f, newCommunicationRadius);
         sensorRadius = Mathf.Clamp(newSensorRadius, 1, 8);
