@@ -1955,7 +1955,21 @@ public sealed class DroneSwarmDemoBootstrap : MonoBehaviour
         return instance;
     }
 
-    private void RegisterSpawned(GameObject instance) => spawnedObjects.Add(instance);
+    private void RegisterSpawned(GameObject instance)
+    {
+        if (instance == null)
+        {
+            return;
+        }
+
+        spawnedObjects.Add(instance);
+
+        Transform runtimeRoot = transform.parent;
+        if (runtimeRoot != null && instance.transform.parent == null)
+        {
+            instance.transform.SetParent(runtimeRoot, true);
+        }
+    }
 
     private void ClearSpawnedObjects()
     {
